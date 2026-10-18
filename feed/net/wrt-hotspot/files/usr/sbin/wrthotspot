@@ -18,7 +18,11 @@ const USAGE = `Usage: wrthotspot <command> [args]
   user del <name>             delete a user (and log out its sessions)
   user reset <name>           reset a user's usage counters
   logout <ip|mac|user|id>     log out matching sessions
-  setup <network>             create firewall zone/rules + server for a network
+  cookies                     HTTP and MAC cookies
+  cookie del <mac|user>       remove cookies of a device or user
+  cert <dns-name>             create a self-signed certificate for HTTPS login
+                              (use a real certificate for production)
+  setup <network>             create firewall zone/rules, DHCP + server for a network
   check                       sanity checks (offloading, nftables, dnsmasq)
   flush                       log everybody out and remove the dataplane
 `;
@@ -162,12 +166,57 @@ function setup(net) {
 		print(`Created hotspot server "${net}"\n`);
 	}
 
+	// Clients need addresses: DHCPv4 plus RA/DHCPv6 for IPv6.
+	c.load('dhcp');
+	let have_dhcp = false;
+	c.foreach('dhcp', 'dhcp', (s) => { if (s.interface == net) have_dhcp = true; });
+
+	if (!have_dhcp && c.get('network', net, 'proto') == 'static') {
+		c.set('dhcp', net, 'dhcp');
+		c.set('dhcp', net, 'interface', net);
+		c.set('dhcp', net, 'start', '10');
+		c.set('dhcp', net, 'limit', '240');
+		c.set('dhcp', net, 'leasetime', '1h');
+		c.set('dhcp', net, 'ra', 'server');
+		c.set('dhcp', net, 'dhcpv6', 'server');
+		c.set('dhcp', net, 'ra_flags', [ 'managed-config', 'other-config' ]);
+		c.save('dhcp');
+		c.commit('dhcp');
+		print(`Created DHCP/RA/DHCPv6 service for "${net}"\n`);
+	}
+
 	c.save('firewall');
 	c.save('wrthotspot');
 	c.commit('firewall');
 	c.commit('wrthotspot');
 
-	print('Done. Apply with:\n  service firewall reload && service wrthotspot restart\n');
+	print('Done. Apply with:\n  service network reload && service firewall reload && service dnsmasq restart && service odhcpd restart && service wrthotspot restart\n');
+}
+
+// Self-signed certificate for HTTPS login; browsers will warn, so use a real
+// certificate (e.g. via acme) for production.
+function make_cert(name) {
+	if (!name || !match(name, /^[A-Za-z0-9.-]+$/))
+		die('Usage: wrthotspot cert <dns-name>\n');
+
+	let dir = '/etc/wrthotspot';
+	let crt = `${dir}/portal.crt`, key = `${dir}/portal.key`;
+
+	run(`mkdir -p ${dir}`);
+
+	let r = run(`px5g selfsigned -days 3650 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -keyout ${key} -out ${crt} -subj /CN=${name}`);
+
+	if (r.code != 0)
+		die(`px5g failed: ${r.out}\n`);
+
+	let c = cursor();
+	c.load('wrthotspot');
+	c.set('wrthotspot', 'global', 'ssl_certificate', crt);
+	c.set('wrthotspot', 'global', 'ssl_key', key);
+	c.save('wrthotspot');
+	c.commit('wrthotspot');
+
+	print(`Wrote ${crt} and ${key} for ${name}.\nSet the server profile's dns_name to ${name}, add 'https' to login_by, then: service wrthotspot reload\n`);
 }
 
 function check() {
@@ -259,6 +308,28 @@ case 'logout':
 		: { user: sel };
 
 	print(`Logged out ${ok(call('logout', { ...a, cause: 'admin-reset' })).count} session(s)\n`);
+	break;
+
+case 'cookies':
+	let ck = call('cookies');
+	table([
+		...map(ck.cookies, (c) => [ 'http', c.user, c.mac, fmt_duration(c.expires_in) ]),
+		...map(ck.mac_cookies, (c) => [ 'mac', c.user, c.mac, fmt_duration(c.expires_in) ]),
+	], [ 'TYPE', 'USER', 'MAC', 'EXPIRES IN' ]);
+	break;
+
+case 'cookie':
+	let csub = shift(args), csel = shift(args);
+
+	if (csub != 'del' || !csel)
+		die(USAGE);
+
+	let cargs = match(csel, /^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$/) ? { mac: csel } : { user: csel };
+	print(`Removed ${ok(call('cookie_remove', cargs)).count} cookie(s)\n`);
+	break;
+
+case 'cert':
+	make_cert(shift(args));
 	break;
 
 case 'setup':

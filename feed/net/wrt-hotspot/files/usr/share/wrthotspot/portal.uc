@@ -19,6 +19,19 @@ const MIME = {
 
 const BUILTIN_PAGES = '/usr/share/wrthotspot/pages/default';
 const MAX_BODY = 16384;
+const COOKIE = 'wrthotspot';
+
+// What OS connectivity probes expect once the client is online. Unauthenticated
+// probes get the normal redirect, which is what pops up the login sheet.
+const PROBES = {
+	'/hotspot-detect.html': [ '200 OK', 'text/html', '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>' ],
+	'/library/test/success.html': [ '200 OK', 'text/html', '<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>' ],
+	'/generate_204': [ '204 No Content', null, null ],
+	'/gen_204': [ '204 No Content', null, null ],
+	'/connecttest.txt': [ '200 OK', 'text/plain', 'Microsoft Connect Test' ],
+	'/ncsi.txt': [ '200 OK', 'text/plain', 'Microsoft NCSI' ],
+	'/success.txt': [ '200 OK', 'text/plain', 'success\n' ],
+};
 
 function send_response(status, headers, body) {
 	let out = `Status: ${status}\r\n`;
@@ -36,8 +49,8 @@ function send_response(status, headers, body) {
 		uhttpd.send(body);
 }
 
-function redirect(url) {
-	send_response('302 Found', { Location: url, 'Content-Type': 'text/html; charset=utf-8' },
+function redirect(url, headers) {
+	send_response('302 Found', { ...(headers ?? {}), Location: url, 'Content-Type': 'text/html; charset=utf-8' },
 		`<html><head><meta http-equiv="refresh" content="0; url=${tpl.escape_html(url)}"></head><body><a href="${tpl.escape_html(url)}">Continue</a></body></html>`);
 }
 
@@ -64,6 +77,18 @@ function parse_query(qs) {
 		let i = index(pair, '=');
 		let k = urldecode((i < 0) ? pair : substr(pair, 0, i));
 		out[k] = (i < 0) ? '' : urldecode(substr(pair, i + 1));
+	}
+
+	return out;
+}
+
+function parse_cookies(h) {
+	let out = {};
+
+	for (let part in split(h ?? '', ';')) {
+		let m = match(trim(part), /^([^=]+)=(.*)$/);
+		if (m)
+			out[m[1]] = m[2];
 	}
 
 	return out;
@@ -106,6 +131,11 @@ function portal_host(env, sp) {
 	return (ip_family(a) == 6) ? `[${a}]` : a;
 }
 
+function origin(scheme, host, port) {
+	let dflt = (scheme == 'https') ? 443 : 80;
+	return `${scheme}://${host}${(port == dflt) ? '' : `:${port}`}`;
+}
+
 function page_path(sp, name) {
 	if (!match(name, /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/) || index(name, '..') >= 0)
 		return null;
@@ -121,7 +151,7 @@ function page_path(sp, name) {
 	return null;
 }
 
-function render_page(sp, name, vars, status) {
+function render_page(sp, name, vars, headers) {
 	let p = page_path(sp, name);
 
 	if (!p) {
@@ -129,7 +159,7 @@ function render_page(sp, name, vars, status) {
 		return;
 	}
 
-	send_response(status ?? '200 OK', { 'Content-Type': 'text/html; charset=utf-8' }, tpl.render(fs.readfile(p), vars));
+	send_response('200 OK', { ...(headers ?? {}), 'Content-Type': 'text/html; charset=utf-8' }, tpl.render(fs.readfile(p), vars));
 }
 
 function serve_static(sp, path) {
@@ -146,7 +176,7 @@ function serve_static(sp, path) {
 function variables(ctx, extra) {
 	let c = ctx.client;
 	let s = c?.session;
-	let base = ctx.base;
+	let base = ctx.login_base;
 
 	let v = {
 		'hostname': ctx.host, 'identity': ctx.identity, 'server-name': c?.server ?? '',
@@ -156,12 +186,13 @@ function variables(ctx, extra) {
 		'login-by': s?.login_by ?? '',
 		'link-login': `${base}/login?dst=${urlencode(ctx.dst)}`,
 		'link-login-only': `${base}/login`,
-		'link-logout': `${base}/logout`,
-		'link-status': `${base}/status`,
+		'link-logout': `${ctx.base}/logout`,
+		'link-status': `${ctx.base}/status`,
 		'link-orig': ctx.dst, 'link-orig-esc': urlencode(ctx.dst),
 		'link-redirect': `${base}/login?dst=${urlencode(ctx.dst)}`,
-		'chap-id': ('http-chap' in ctx.sp.login_by) ? c?.chap_id : '',
-		'chap-challenge': ('http-chap' in ctx.sp.login_by) ? c?.chap_challenge : '',
+		// CHAP is pointless (and MikroTik disables it) when the form goes over TLS.
+		'chap-id': ('http-chap' in ctx.sp.login_by && !ctx.https_login) ? c?.chap_id : '',
+		'chap-challenge': ('http-chap' in ctx.sp.login_by && !ctx.https_login) ? c?.chap_challenge : '',
 		'error': ctx.error ?? '', 'error-orig': ctx.error ?? '',
 		'session-id': s?.id ?? '',
 		'uptime': s ? fmt_duration(s.uptime) : '', 'uptime-secs': s?.uptime ?? '',
@@ -171,14 +202,19 @@ function variables(ctx, extra) {
 		'bytes-in': s?.bytes_in ?? '', 'bytes-out': s?.bytes_out ?? '',
 		'bytes-in-nice': s ? fmt_bytes(s.bytes_in) : '', 'bytes-out-nice': s ? fmt_bytes(s.bytes_out) : '',
 		'packets-in': s?.packets_in ?? '', 'packets-out': s?.packets_out ?? '',
+		'limit-bytes-in': s?.limits?.bytes_in || '', 'limit-bytes-out': s?.limits?.bytes_out || '',
+		'remain-bytes-in': s?.limits?.bytes_in ? max(0, s.limits.bytes_in - s.bytes_in) : '',
+		'remain-bytes-out': s?.limits?.bytes_out ? max(0, s.limits.bytes_out - s.bytes_out) : '',
 		'refresh-timeout': s ? fmt_duration(s.limits.status_autorefresh) : '',
 		'refresh-timeout-secs': s?.limits?.status_autorefresh ?? '',
 		'popup': 'false',
-		'plain-passwd': ('http-pap' in ctx.sp.login_by) ? 'yes' : 'no',
+		'plain-passwd': ('http-pap' in ctx.sp.login_by || ctx.https_login) ? 'yes' : 'no',
 		'http-status': '', 'var': ctx.form.var ?? '',
 		'user-agent': ctx.env.HTTP_USER_AGENT ?? '',
 		'host-ip': ctx.ip,
-		'ssl-login': 'no',
+		'interface-name': c?.host?.dev ?? '',
+		'domain': '', 'vlan-id': '', 'advert-pending': 'no',
+		'ssl-login': ctx.https_login ? 'yes' : 'no',
 		'ipv6': join(' ', c?.host?.ipv6 ?? []),
 	};
 
@@ -192,7 +228,7 @@ function do_login(ctx, conn) {
 
 	if (f.trial == 'yes' || match(req.username, /^T-/))
 		req.method = 'trial';
-	else if ('http-chap' in sp.login_by && match(req.password, /^[0-9a-fA-F]{32}$/))
+	else if ('http-chap' in sp.login_by && !ctx.https_login && match(req.password, /^[0-9a-fA-F]{32}$/))
 		req = { ...req, method: 'http-chap', chap_response: req.password };
 	else
 		req.method = 'http-pap';
@@ -206,6 +242,17 @@ function do_login(ctx, conn) {
 	return res ?? { ok: false, error: 'hotspot service unavailable' };
 }
 
+function cookie_header(res) {
+	if (!res?.cookie)
+		return {};
+
+	return { 'Set-Cookie': `${COOKIE}=${res.cookie.token}; Max-Age=${res.cookie.max_age}; Path=/; HttpOnly; SameSite=Lax` };
+}
+
+function logged_in(ctx, res, headers) {
+	render_page(ctx.sp, 'alogin.html', variables(ctx, { 'link-redirect': ctx.dst || `${ctx.base}/status` }), headers);
+}
+
 global.handle_request = function(env) {
 	let conn = ubus.connect();
 
@@ -215,6 +262,7 @@ global.handle_request = function(env) {
 	}
 
 	let cfg = load_config();
+	let g = cfg.global;
 	let ip = normalize_ip(env.REMOTE_ADDR);
 	let client = conn.call('wrthotspot', 'client', { ip });
 
@@ -227,33 +275,42 @@ global.handle_request = function(env) {
 	let qpos = index(uri, '?');
 	let path = (qpos >= 0) ? substr(uri, 0, qpos) : uri;
 	let form = parse_query(env.QUERY_STRING);
+	let is_https = (env.HTTPS == 'on');
 
 	if (env.REQUEST_METHOD == 'POST' && match(env.CONTENT_TYPE ?? '', /^application\/x-www-form-urlencoded/))
 		form = { ...form, ...parse_query(read_body(env)) };
 
 	let host = portal_host(env, sp);
-	let port = int(env.SERVER_PORT ?? cfg.global.portal_port);
-	let base = `http://${host}${(port == 80) ? '' : `:${port}`}`;
+	let https_login = ('https' in sp.login_by) && g.ssl_certificate && fs.stat(g.ssl_certificate) && fs.stat(g.ssl_key);
+	let base = origin(is_https ? 'https' : 'http', host, int(env.SERVER_PORT ?? g.portal_port));
 
 	let ctx = {
-		env, cfg, sp, ip, form, host, base, client,
-		identity: cfg.global.nas_identifier || 'WrtHotspot',
+		env, cfg, sp, ip, form, host, base, client, https_login,
+		login_base: https_login ? origin('https', host, g.https_port) : base,
+		identity: g.nas_identifier || 'WrtHotspot',
 		server_addr: normalize_ip(env.SERVER_ADDR),
 		dst: form.dst ?? '',
 	};
 
-	// Any request for a foreign host was redirected here by nftables:
-	// send the browser to the login page, remembering where it wanted to go.
+	// Any request for a foreign host was redirected here by nftables.
 	let req_host = host_without_port(env.HTTP_HOST);
 	let ours = (req_host == lc(sp.dns_name ?? '')) || (req_host == ctx.server_addr) || (req_host == '');
 
 	if (!ours) {
 		let orig = `http://${env.HTTP_HOST}${uri}`;
 
-		if (client?.session)
-			redirect(orig);		// logged in meanwhile, the new connection will pass
-		else
-			redirect(`${base}/login?dst=${urlencode(orig)}`);
+		if (client?.session) {
+			// Logged in meanwhile but this connection was still NATed to us.
+			let p = PROBES[path];
+
+			if (p)
+				send_response(p[0], p[1] ? { 'Content-Type': p[1] } : {}, p[2]);
+			else
+				redirect(orig);
+		}
+		else {
+			redirect(`${ctx.login_base}/login?dst=${urlencode(orig)}`);
+		}
 
 		return;
 	}
@@ -261,12 +318,14 @@ global.handle_request = function(env) {
 	// RFC 8908 captive portal API.
 	if (path == '/api/captive' || path == '/api.json') {
 		let s = client?.session;
-		let body = { captive: !s, 'user-portal-url': `${base}/login` };
+		let body = { captive: !s, 'user-portal-url': `${ctx.login_base}/login` };
 
 		if (s) {
 			body['venue-info-url'] = `${base}/status`;
 			if (s.session_time_left != null)
 				body['seconds-remaining'] = s.session_time_left;
+			if (s.limits?.bytes_total)
+				body['bytes-remaining'] = max(0, s.limits.bytes_total - s.bytes_in - s.bytes_out);
 			body['can-extend-session'] = false;
 		}
 
@@ -276,10 +335,13 @@ global.handle_request = function(env) {
 
 	if (path == '/' || path == '/login') {
 		if (client?.session && env.REQUEST_METHOD != 'POST') {
-			if (ctx.dst)
-				redirect(ctx.dst);
-			else
-				redirect(`${base}/status`);
+			redirect(ctx.dst || `${base}/status`);
+			return;
+		}
+
+		// login-by=https: the form (and the password) only travel over TLS.
+		if (https_login && !is_https) {
+			redirect(`${ctx.login_base}${uri}`);
 			return;
 		}
 
@@ -288,12 +350,25 @@ global.handle_request = function(env) {
 
 			if (res.ok) {
 				ctx.client = conn.call('wrthotspot', 'client', { ip }) ?? client;
-				render_page(sp, 'alogin.html', variables(ctx, { 'link-redirect': ctx.dst || `${base}/status` }));
+				logged_in(ctx, res, cookie_header(res));
 				return;
 			}
 
 			ctx.error = res.error;
 			ctx.client = conn.call('wrthotspot', 'client', { ip }) ?? client;	// fresh CHAP challenge
+		}
+		else if ('cookie' in sp.login_by) {
+			let token = parse_cookies(env.HTTP_COOKIE)[COOKIE];
+
+			if (token && match(token, /^[0-9a-f]{32}$/)) {
+				let res = conn.call('wrthotspot', 'login', { ip, method: 'cookie', cookie: token });
+
+				if (res?.ok) {
+					ctx.client = conn.call('wrthotspot', 'client', { ip }) ?? client;
+					logged_in(ctx, res, {});
+					return;
+				}
+			}
 		}
 
 		render_page(sp, 'login.html', variables(ctx));
@@ -306,14 +381,16 @@ global.handle_request = function(env) {
 	}
 
 	if (path == '/logout') {
+		let erase = { 'Set-Cookie': `${COOKIE}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax` };
+
 		if (!client?.session) {
-			render_page(sp, 'flogout.html', variables(ctx));
+			render_page(sp, 'flogout.html', variables(ctx), erase);
 			return;
 		}
 
 		let before = variables(ctx);
 		conn.call('wrthotspot', 'logout', { ip, cause: 'user-request' });
-		render_page(sp, 'logout.html', before);
+		render_page(sp, 'logout.html', before, erase);
 		return;
 	}
 

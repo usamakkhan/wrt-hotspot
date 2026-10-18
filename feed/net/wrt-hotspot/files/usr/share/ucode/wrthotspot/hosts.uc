@@ -77,6 +77,9 @@ export function create(opts) {
 
 		ip2mac[ip] = mac;
 
+		if (opts && opts.on_update)
+			opts.on_update(h);
+
 		if (msg.state & (C.NUD_REACHABLE | C.NUD_PERMANENT)) {
 			h.last_seen = now;
 			if (opts && opts.on_seen)

@@ -1,11 +1,12 @@
 // hotspotd core: sessions (MikroTik /ip hotspot active), login methods,
-// limits, accounting and crash/restart recovery.
+// cookies, limits, accounting and crash/restart recovery.
 'use strict';
 
 import * as fs from 'fs';
 import * as uloop from 'uloop';
 import { md5 } from 'digest';
 import * as nft from 'wrthotspot.nft';
+import * as dns from 'wrthotspot.dns';
 import * as users_db from 'wrthotspot.users';
 import * as hosts_mod from 'wrthotspot.hosts';
 import { load as load_config } from 'wrthotspot.config';
@@ -14,7 +15,7 @@ import {
 	read_json, write_atomic, mkdir_p, fmt_duration, fmt_bytes
 } from 'wrthotspot.util';
 
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 // MikroTik / RADIUS terminate causes.
 export const CAUSE = {
@@ -29,6 +30,11 @@ export const CAUSE = {
 	USER_REMOVED: 'user-removed',
 	NAS_REBOOT: 'nas-reboot',
 };
+
+// Cookies survive only these causes: the device left (idle/keepalive) or
+// the router restarted. Everything else (explicit logout, admin reset,
+// limits, session-timeout) removes them, as on MikroTik.
+const COOKIE_KEEP = [ CAUSE.IDLE_TIMEOUT, CAUSE.KEEPALIVE_TIMEOUT, CAUSE.NEW_LOGIN, CAUSE.NAS_REBOOT ];
 
 const CHAP_TTL = 300;
 
@@ -53,9 +59,13 @@ export function create(opts) {
 	let devices = {};		// dev -> server name
 	let chap = {};			// mac -> { id, challenge, expires }
 	let trials = {};		// mac -> { used, window_start }
+	let cookies = {};		// token -> { user, mac, server, expires }
+	let mac_cookies = {};		// mac -> { user, server, expires }
+	let cookies_dirty = false;
 	let users;
 	let hosts;
 	let need_rebuild = true;
+	let try_mac_cookie;		// defined below, used by self.client
 
 	let self = {};
 
@@ -148,6 +158,65 @@ export function create(opts) {
 		};
 	}
 
+	/* ---------- cookies ---------- */
+
+	function cookies_path() {
+		return `${cfg.global.db_dir}/cookies.json`;
+	}
+
+	function load_cookies() {
+		let c = read_json(cookies_path());
+		cookies = c?.cookies ?? {};
+		mac_cookies = c?.mac_cookies ?? {};
+	}
+
+	function save_cookies(force) {
+		if (!cookies_dirty && !force)
+			return;
+
+		let now = time();
+
+		for (let t, c in cookies)
+			if (c.expires < now)
+				delete cookies[t];
+
+		for (let m, c in mac_cookies)
+			if (c.expires < now)
+				delete mac_cookies[m];
+
+		write_atomic(cookies_path(), sprintf('%J', { version: 1, cookies, mac_cookies }));
+		cookies_dirty = false;
+	}
+
+	function drop_cookies(mac) {
+		for (let t, c in cookies)
+			if (c.mac == mac)
+				delete cookies[t];
+
+		delete mac_cookies[mac];
+		cookies_dirty = true;
+	}
+
+	// After a credential login: remember the device, as configured.
+	function issue_cookies(mac, server, username, profile) {
+		let sp = server_profile_of(server);
+		let up = user_profile(profile);
+		let token = null;
+
+		if ('cookie' in sp.login_by) {
+			token = random_hex(16);
+			cookies[token] = { user: username, mac, server, expires: time() + sp.http_cookie_lifetime };
+			cookies_dirty = true;
+		}
+
+		if ('mac-cookie' in sp.login_by && up.add_mac_cookie) {
+			mac_cookies[mac] = { user: username, server, expires: time() + up.mac_cookie_timeout };
+			cookies_dirty = true;
+		}
+
+		return token;
+	}
+
 	/* ---------- configuration & devices ---------- */
 
 	function resolve_devices() {
@@ -175,23 +244,31 @@ export function create(opts) {
 		return devs;
 	}
 
+	function apply_dns() {
+		if (opts?.no_dns)
+			return;
+
+		if (!dns.dnsmasq_has_nftset() && length(filter(cfg.walled_garden, (e) => e.host)))
+			log('warn', 'dnsmasq lacks nftset support (install dnsmasq-full): walled-garden subdomains are not covered, only the listed hosts');
+
+		dns.apply_dnsmasq(cfg, devices);
+		dns.apply_odhcpd(cfg);
+	}
+
 	self.reload = function() {
 		cfg = load_config(confdir);
 		set_log_level(cfg.global.log_level);
 		mkdir_p(cfg.global.state_dir);
 
-		let devs = resolve_devices();
-		let changed = sprintf('%J', devs) != sprintf('%J', devices);
-
-		devices = devs;
+		devices = resolve_devices();
 
 		if (hosts)
 			hosts.set_devices(devices);
 
-		if (changed)
-			need_rebuild = true;
-
-		return self.rebuild();
+		// Bindings and walled garden may have changed: always rebuild.
+		let err = self.rebuild();
+		apply_dns();
+		return err;
 	};
 
 	self.devices = () => devices;
@@ -215,9 +292,12 @@ export function create(opts) {
 
 		let text = nft.ruleset({
 			ifaces: keys(devices),
+			devices,
 			port: cfg.global.portal_port,
 			sessions: map(values(sessions), (s) => ({ slot: s.slot, mac: s.mac })),
-			bypass: [], block: [], wg4: [], wg6: [],
+			bindings: cfg.ip_bindings,
+			walled_garden: cfg.walled_garden,
+			wg_ttl: cfg.global.walled_garden_ttl,
 		});
 
 		let err = nft.apply(text, cfg.global.state_dir);
@@ -229,8 +309,18 @@ export function create(opts) {
 
 		need_rebuild = false;
 		checkpoint();
-		log('info', 'Dataplane built: %d device(s), %d session(s)', length(keys(devices)), length(keys(sessions)));
+		log('info', 'Dataplane built: %d device(s), %d session(s), %d binding(s), %d walled-garden entr%s',
+			length(keys(devices)), length(keys(sessions)), length(cfg.ip_bindings), length(cfg.walled_garden),
+			(length(cfg.walled_garden) == 1) ? 'y' : 'ies');
+
+		// The rebuild emptied the walled-garden host sets: refill them.
+		self.resolve();
 		return null;
+	};
+
+	self.resolve = function() {
+		if (!opts?.no_dns)
+			dns.resolve_walled_garden(cfg, cfg.global.state_dir, exec);
 	};
 
 	/* ---------- CHAP ---------- */
@@ -279,6 +369,8 @@ export function create(opts) {
 		if (!mac)
 			return null;
 
+		try_mac_cookie(mac);
+
 		let h = hosts.get(mac);
 		let slot = by_mac[mac];
 
@@ -317,6 +409,17 @@ export function create(opts) {
 
 	self.hosts = function() {
 		return map(hosts.list(), (h) => ({ ...h, authorized: !!by_mac[h.mac] }));
+	};
+
+	self.cookies = function() {
+		let now = time();
+
+		return {
+			cookies: map(filter(keys(cookies), (t) => cookies[t].expires > now),
+				(t) => ({ user: cookies[t].user, mac: cookies[t].mac, expires_in: cookies[t].expires - now })),
+			mac_cookies: map(filter(keys(mac_cookies), (m) => mac_cookies[m].expires > now),
+				(m) => ({ user: mac_cookies[m].user, mac: m, expires_in: mac_cookies[m].expires - now })),
+		};
 	};
 
 	self.users = () => users;
@@ -384,25 +487,108 @@ export function create(opts) {
 		return [ s, null ];
 	}
 
-	// req: { ip?, mac?, method, username?, password?, chap_response? }
-	// Returns { ok, session?, error?, code? }.
+	function fail(code, error) {
+		return { ok: false, code, error };
+	}
+
+	// Account checks shared by every user-based login method.
+	function authorize_user(mac, server, username, method) {
+		let user = users.get(username);
+
+		if (!user)
+			return fail('invalid', 'invalid username or password');
+
+		if (user.disabled)
+			return fail('disabled', 'user is disabled');
+
+		if (user.server && user.server != 'all' && user.server != server)
+			return fail('server', 'user is not allowed on this server');
+
+		if (user.mac && user.mac != mac)
+			return fail('mac', 'user is bound to another device');
+
+		let used = user.used ?? { uptime: 0, bytes_in: 0, bytes_out: 0 };
+
+		if (user.limit_uptime && used.uptime >= user.limit_uptime)
+			return fail('uptime-limit', 'uptime limit reached');
+
+		if ((user.limit_bytes_in && used.bytes_in >= user.limit_bytes_in) ||
+		    (user.limit_bytes_out && used.bytes_out >= user.limit_bytes_out) ||
+		    (user.limit_bytes_total && used.bytes_in + used.bytes_out >= user.limit_bytes_total))
+			return fail('traffic-limit', 'traffic limit reached');
+
+		let up = user_profile(user.profile);
+		let active = filter(values(sessions), (s) => s.user == username && s.mac != mac);
+
+		if (up.shared_users > 0 && length(active) >= up.shared_users)
+			return fail('shared-users', 'no more sessions are allowed for this user');
+
+		let res = start_session(mac, server, username, user.profile, method, 0, user);
+
+		if (!res[0])
+			return fail('internal', res[1]);
+
+		let out = { ok: true, session: self.session_view(res[0]) };
+
+		// Cookie logins don't mint new cookies; credential logins may.
+		if (method != 'cookie' && method != 'mac-cookie') {
+			let token = issue_cookies(mac, server, username, user.profile);
+
+			if (token)
+				out.cookie = { token, max_age: server_profile_of(server).http_cookie_lifetime };
+		}
+
+		return out;
+	}
+
+	// MAC-cookie: log a returning device back in without any page.
+	try_mac_cookie = function(mac) {
+		if (by_mac[mac] || !mac_cookies[mac])
+			return null;
+
+		let mc = mac_cookies[mac];
+		let h = hosts.get(mac);
+
+		if (mc.expires < time() || !h?.server || !('mac-cookie' in server_profile_of(h.server).login_by)) {
+			delete mac_cookies[mac];
+			cookies_dirty = true;
+			return null;
+		}
+
+		let res = authorize_user(mac, h.server, mc.user, 'mac-cookie');
+
+		// Failed MAC-cookie logins remove the cookie (MikroTik does the same).
+		if (!res.ok) {
+			log('info', 'MAC-cookie login for %s (%s) refused: %s', mc.user, mac, res.error);
+			delete mac_cookies[mac];
+			cookies_dirty = true;
+		}
+
+		return res;
+	};
+
+	// req: { ip?, mac?, method, username?, password?, chap_response?, cookie? }
+	// Returns { ok, session?, cookie?, error?, code? }.
 	self.login = function(req) {
 		let mac = normalize_mac(req.mac) ?? (req.ip ? hosts.mac_of(req.ip) : null);
 
 		if (!mac)
-			return { ok: false, code: 'no-host', error: 'unknown client (no neighbor entry)' };
+			return fail('no-host', 'unknown client (no neighbor entry)');
 
 		let h = hosts.get(mac);
 		let server = h?.server;
 
 		if (!server)
-			return { ok: false, code: 'no-server', error: 'client is not on a hotspot interface' };
+			return fail('no-server', 'client is not on a hotspot interface');
 
 		let sp = server_profile_of(server);
 		let method = req.method ?? ((req.chap_response ?? '') !== '' ? 'http-chap' : 'http-pap');
 
-		if (!(method in sp.login_by))
-			return { ok: false, code: 'method', error: `login method ${method} is not enabled` };
+		// "https" is a transport for the PAP form, not a separate credential check.
+		let enabled = (method == 'http-pap' && 'https' in sp.login_by) || (method in sp.login_by);
+
+		if (!enabled)
+			return fail('method', `login method ${method} is not enabled`);
 
 		if (method == 'trial') {
 			let t = trials[mac];
@@ -414,11 +600,34 @@ export function create(opts) {
 			let remaining = sp.trial_uptime_limit - t.used;
 
 			if (remaining <= 0)
-				return { ok: false, code: 'trial-expired', error: 'free trial used up, try again later' };
+				return fail('trial-expired', 'free trial used up, try again later');
 
 			let res = start_session(mac, server, `T-${mac}`, sp.trial_user_profile, 'trial', remaining, null);
-			return res[0] ? { ok: true, session: self.session_view(res[0]) } : { ok: false, code: 'internal', error: res[1] };
+			return res[0] ? { ok: true, session: self.session_view(res[0]) } : fail('internal', res[1]);
 		}
+
+		if (method == 'cookie') {
+			let c = cookies[req.cookie ?? ''];
+
+			if (!c || c.expires < time() || c.mac != mac) {
+				if (c && c.mac != mac)
+					log('warn', 'Cookie of %s presented by %s, ignored', c.mac, mac);
+
+				return fail('cookie', 'cookie expired or invalid');
+			}
+
+			let res = authorize_user(mac, server, c.user, 'cookie');
+
+			if (!res.ok) {
+				delete cookies[req.cookie];
+				cookies_dirty = true;
+			}
+
+			return res;
+		}
+
+		if (method == 'mac-cookie')
+			return try_mac_cookie(mac) ?? fail('cookie', 'no MAC cookie');
 
 		let username = req.username;
 		let password = req.password;
@@ -437,35 +646,9 @@ export function create(opts) {
 		let user = users.get(username);
 
 		if (!user || !check_password(mac, user, password, (method == 'http-chap') ? req.chap_response : null))
-			return { ok: false, code: 'invalid', error: 'invalid username or password' };
+			return fail('invalid', 'invalid username or password');
 
-		if (user.disabled)
-			return { ok: false, code: 'disabled', error: 'user is disabled' };
-
-		if (user.server && user.server != 'all' && user.server != server)
-			return { ok: false, code: 'server', error: 'user is not allowed on this server' };
-
-		if (user.mac && user.mac != mac)
-			return { ok: false, code: 'mac', error: 'user is bound to another device' };
-
-		let used = user.used ?? { uptime: 0, bytes_in: 0, bytes_out: 0 };
-
-		if (user.limit_uptime && used.uptime >= user.limit_uptime)
-			return { ok: false, code: 'uptime-limit', error: 'uptime limit reached' };
-
-		if ((user.limit_bytes_in && used.bytes_in >= user.limit_bytes_in) ||
-		    (user.limit_bytes_out && used.bytes_out >= user.limit_bytes_out) ||
-		    (user.limit_bytes_total && used.bytes_in + used.bytes_out >= user.limit_bytes_total))
-			return { ok: false, code: 'traffic-limit', error: 'traffic limit reached' };
-
-		let up = user_profile(user.profile);
-		let active = filter(values(sessions), (s) => s.user == username && s.mac != mac);
-
-		if (up.shared_users > 0 && length(active) >= up.shared_users)
-			return { ok: false, code: 'shared-users', error: 'no more sessions are allowed for this user' };
-
-		let res = start_session(mac, server, username, user.profile, method, 0, user);
-		return res[0] ? { ok: true, session: self.session_view(res[0]) } : { ok: false, code: 'internal', error: res[1] };
+		return authorize_user(mac, server, username, method);
 	};
 
 	function finish(s, cause) {
@@ -480,6 +663,9 @@ export function create(opts) {
 		else {
 			users.add_usage(s.user, uptime, t.bytes_in, t.bytes_out);
 		}
+
+		if (!(cause in COOKIE_KEEP))
+			drop_cookies(s.mac);
 
 		log('info', 'Logout %s (%s): %s, %s, in %d / out %d bytes', s.user, s.mac, cause, fmt_duration(uptime), t.bytes_in, t.bytes_out);
 		event('logout', { user: s.user, mac: s.mac, server: s.server, session_id: s.id, cause, uptime, ...t });
@@ -509,6 +695,7 @@ export function create(opts) {
 
 		exec(cmds);
 		checkpoint();		// RAM; user usage reaches flash on the db_sync timer
+		save_cookies(false);
 		return length(cmds) > 0;
 	};
 
@@ -526,6 +713,27 @@ export function create(opts) {
 
 		self.logout_many(list);
 		return length(list);
+	};
+
+	self.cookie_remove = function(sel) {
+		let mac = normalize_mac(sel.mac);
+		let n = 0;
+
+		for (let t, c in cookies)
+			if ((mac && c.mac == mac) || (sel.user && c.user == sel.user)) {
+				delete cookies[t];
+				n++;
+			}
+
+		for (let m, c in mac_cookies)
+			if ((mac && m == mac) || (sel.user && c.user == sel.user)) {
+				delete mac_cookies[m];
+				n++;
+			}
+
+		cookies_dirty = true;
+		save_cookies(true);
+		return n;
 	};
 
 	/* ---------- periodic work ---------- */
@@ -591,6 +799,7 @@ export function create(opts) {
 
 	self.sync_db = function() {
 		users.save(false);
+		save_cookies(false);
 	};
 
 	/* ---------- startup / shutdown ---------- */
@@ -629,6 +838,7 @@ export function create(opts) {
 
 		users = users_db.create(cfg.global.db_dir);
 		log('info', 'Loaded %d user(s)', users.load());
+		load_cookies();
 
 		hosts = hosts_mod.create({
 			on_seen: (h) => {
@@ -636,16 +846,24 @@ export function create(opts) {
 				if (slot)
 					sessions[slot].last_seen = time();
 			},
+			// A device we have a MAC cookie for showed up again.
+			on_update: (h) => {
+				if (!by_mac[h.mac] && mac_cookies[h.mac])
+					try_mac_cookie(h.mac);
+			},
 		});
 
 		devices = resolve_devices();
 		hosts.set_devices(devices);
 		restore();
 
+		let err = self.rebuild();
+		apply_dns();
+
 		if (opts?.no_netlink != true)
 			hosts.start();
 
-		return self.rebuild();
+		return err;
 	};
 
 	// On a clean stop we keep sessions (and the table) so clients stay online
@@ -653,6 +871,7 @@ export function create(opts) {
 	self.stop = function() {
 		checkpoint();
 		users.save(true);
+		save_cookies(true);
 	};
 
 	self.flush = function() {

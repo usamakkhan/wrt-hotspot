@@ -2,7 +2,7 @@
 'use strict';
 
 import { cursor } from 'uci';
-import { parse_duration, parse_size, to_bool, as_list, log } from 'wrthotspot.util';
+import { parse_duration, parse_size, to_bool, as_list, normalize_mac, log } from 'wrthotspot.util';
 
 const LOGIN_METHODS = [ 'mac', 'cookie', 'http-chap', 'http-pap', 'https', 'trial', 'mac-cookie' ];
 
@@ -25,6 +25,7 @@ function server_profile(s) {
 		trial_uptime_reset: dur(s.trial_uptime_reset, '1d'),
 		trial_user_profile: s.trial_user_profile ?? 'default',
 		split_user_domain: to_bool(s.split_user_domain),
+		rfc8910: to_bool(s.rfc8910 ?? '1'),
 		use_radius: to_bool(s.use_radius),
 	};
 }
@@ -58,6 +59,110 @@ function server(s) {
 	};
 }
 
+// "1.2.3.4", "10.0.0.0/8", "2001:db8::/32" -> { family, cidr } or null.
+export function parse_prefix(v) {
+	let m = match(trim(`${v ?? ''}`), /^([^\/]+)(\/(\d+))?$/);
+	let a = m ? iptoarr(m[1]) : null;
+
+	if (!a)
+		return null;
+
+	let family = (length(a) == 16) ? 6 : 4;
+	let bits = (m[3] != null) ? int(m[3]) : ((family == 6) ? 128 : 32);
+
+	if (bits < 0 || bits > ((family == 6) ? 128 : 32))
+		return null;
+
+	// Clear host bits so "10.0.0.5/8" becomes "10.0.0.0/8".
+	for (let i = 0; i < length(a); i++) {
+		let keep = min(8, max(0, bits - i * 8));
+		a[i] &= (0xff << (8 - keep)) & 0xff;
+	}
+
+	return { family, cidr: (m[3] != null) ? `${arrtoip(a)}/${bits}` : arrtoip(a) };
+};
+
+// Domain for dnsmasq/nslookup: "*.example.com" and "example.com" both mean
+// the domain and its subdomains (dnsmasq semantics).
+export function parse_host(v) {
+	let h = lc(trim(`${v ?? ''}`));
+
+	if (substr(h, 0, 2) == '*.')
+		h = substr(h, 2);
+
+	return match(h, /^([a-z0-9_]([a-z0-9_-]*[a-z0-9_])?\.)*[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?\.?$/) ? rtrim(h, '.') : null;
+};
+
+function walled_garden(s, idx) {
+	let e = {
+		idx,
+		action: (s.action == 'deny') ? 'deny' : 'allow',
+		server: s.server ?? 'all',
+		host: null, prefixes: [],
+		protocol: (s.protocol in [ 'tcp', 'udp' ]) ? s.protocol : null,
+		dst_port: null,
+		comment: s.comment ?? '',
+	};
+
+	if (s.dst_host) {
+		e.host = parse_host(s.dst_host);
+
+		if (!e.host)
+			return [ null, `invalid dst_host "${s.dst_host}"` ];
+	}
+
+	for (let a in as_list(s.dst_address)) {
+		let p = parse_prefix(a);
+
+		if (!p)
+			return [ null, `invalid dst_address "${a}"` ];
+
+		push(e.prefixes, p);
+	}
+
+	if (s.dst_port != null && s.dst_port !== '') {
+		if (!match(`${s.dst_port}`, /^\d{1,5}(-\d{1,5})?$/))
+			return [ null, `invalid dst_port "${s.dst_port}"` ];
+
+		e.dst_port = `${s.dst_port}`;
+		e.protocol ??= 'tcp';
+	}
+
+	if (!e.host && !length(e.prefixes) && !e.dst_port)
+		return [ null, 'needs dst_host, dst_address or dst_port' ];
+
+	return [ e, null ];
+}
+
+function ip_binding(s) {
+	let b = {
+		type: (s.type in [ 'bypassed', 'blocked', 'regular' ]) ? s.type : 'regular',
+		server: s.server ?? 'all',
+		mac: (s.mac != null && s.mac !== '') ? normalize_mac(s.mac) : null,
+		address: null,
+		comment: s.comment ?? '',
+	};
+
+	if (s.mac != null && s.mac !== '' && !b.mac)
+		return [ null, `invalid mac "${s.mac}"` ];
+
+	if (s.address != null && s.address !== '') {
+		b.address = parse_prefix(s.address);
+
+		if (!b.address)
+			return [ null, `invalid address "${s.address}"` ];
+
+		// MAC + address is matched as a pair, which needs a single address.
+		if (b.mac && index(b.address.cidr, '/') >= 0)
+			return [ null, 'mac + address bindings need a single address, not a prefix' ];
+	}
+
+	if (!b.mac && !b.address)
+		return [ null, 'needs mac or address' ];
+
+	return [ b, null ];
+}
+
 export function load(confdir) {
 	let c = cursor(confdir);
 	let g = c.get_all('wrthotspot', 'global') ?? {};
@@ -72,8 +177,15 @@ export function load(confdir) {
 			db_sync_interval: dur(g.db_sync_interval, '5m') || 300,
 			log_level: g.log_level ?? 'info',
 			nas_identifier: g.nas_identifier ?? '',
+			https_port: int(g.https_port ?? (int(g.portal_port ?? 8002) + 1)),
+			ssl_certificate: g.ssl_certificate ?? '',
+			ssl_key: g.ssl_key ?? '',
+			resolve_interval: dur(g.resolve_interval, '5m') || 300,
+			walled_garden_ttl: dur(g.walled_garden_ttl, '1h') || 3600,
 		},
 		servers: {},
+		walled_garden: [],
+		ip_bindings: [],
 		server_profiles: {},
 		user_profiles: {},
 	};
@@ -92,6 +204,29 @@ export function load(confdir) {
 		}
 
 		cfg.servers[srv.name] = srv;
+	});
+
+	let wg_idx = 0;
+	c.foreach('wrthotspot', 'walled_garden', (s) => {
+		if (!to_bool(s.enabled ?? '1'))
+			return;
+
+		let r = walled_garden(s, ++wg_idx);
+		if (r[0])
+			push(cfg.walled_garden, r[0]);
+		else
+			log('warn', 'Walled garden entry %s ignored: %s', s['.name'], r[1]);
+	});
+
+	c.foreach('wrthotspot', 'ip_binding', (s) => {
+		if (!to_bool(s.enabled ?? '1'))
+			return;
+
+		let r = ip_binding(s);
+		if (r[0])
+			push(cfg.ip_bindings, r[0]);
+		else
+			log('warn', 'IP binding %s ignored: %s', s['.name'], r[1]);
 	});
 
 	// Always have defaults so a fresh install works.

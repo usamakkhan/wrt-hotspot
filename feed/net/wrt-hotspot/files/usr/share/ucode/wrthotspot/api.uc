@@ -43,7 +43,7 @@ export function publish(conn, core) {
 		},
 
 		login: {
-			args: { ip: '', mac: '', method: '', username: '', password: '', chap_response: '' },
+			args: { ip: '', mac: '', method: '', username: '', password: '', chap_response: '', cookie: '' },
 			call: function(req) {
 				return core.login(req.args);
 			},
@@ -71,6 +71,22 @@ export function publish(conn, core) {
 		hosts: {
 			call: function() {
 				return { hosts: core.hosts() };
+			},
+		},
+
+		cookies: {
+			call: function() {
+				return core.cookies();
+			},
+		},
+
+		cookie_remove: {
+			args: { mac: '', user: '' },
+			call: function(req) {
+				if (!req.args.mac && !req.args.user)
+					return err('mac or user is required');
+
+				return { ok: true, count: core.cookie_remove(req.args) };
 			},
 		},
 

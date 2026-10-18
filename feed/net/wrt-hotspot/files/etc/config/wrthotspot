@@ -3,10 +3,18 @@ config global 'global'
 	# Seconds between counter reads / timeout checks.
 	option poll_interval '10s'
 	option portal_port '8002'
+	# HTTPS portal (login_by https, RFC 8908/8910). `wrthotspot cert <name>`
+	# creates a self-signed pair; use a real certificate in production.
+	#option https_port '8003'
+	#option ssl_certificate '/etc/wrthotspot/portal.crt'
+	#option ssl_key '/etc/wrthotspot/portal.key'
 	option state_dir '/tmp/wrthotspot'
 	option db_dir '/etc/wrthotspot'
-	# How often user usage counters are written to flash.
+	# How often user usage counters and cookies are written to flash.
 	option db_sync_interval '5m'
+	# Walled-garden hosts: re-resolve interval and how long addresses stay.
+	option resolve_interval '5m'
+	option walled_garden_ttl '1h'
 	option log_level 'info'
 	option nas_identifier 'WrtHotspot'
 
@@ -18,13 +26,19 @@ config global 'global'
 
 config server_profile
 	option name 'default'
+	# Portal host name; resolves to the router on each hotspot network.
 	option dns_name ''
+	# mac, cookie, http-chap, http-pap, https, trial, mac-cookie
 	list login_by 'http-chap'
 	list login_by 'http-pap'
+	list login_by 'cookie'
+	option http_cookie_lifetime '3d'
 	option html_directory '/usr/share/wrthotspot/pages/default'
 	option trial_uptime_limit '30m'
 	option trial_uptime_reset '1d'
 	option trial_user_profile 'default'
+	# Announce the RFC 8908 API in DHCP/RA (needs dns_name + certificate).
+	option rfc8910 '1'
 
 config user_profile
 	option name 'default'
@@ -33,3 +47,22 @@ config user_profile
 	option idle_timeout '0'
 	option keepalive_timeout '2m'
 	option status_autorefresh '1m'
+	option add_mac_cookie '1'
+	option mac_cookie_timeout '3d'
+
+# Walled garden: reachable without logging in. dst_host covers the domain
+# and its subdomains (subdomains need dnsmasq-full).
+#config walled_garden
+#	option dst_host 'example.com'
+#	option dst_address '203.0.113.0/24 2001:db8::/32'
+#	option protocol 'tcp'
+#	option dst_port '443'
+#	option action 'allow'		# or 'deny' to carve out exceptions
+#	option server 'all'
+
+# IP bindings: bypassed (no login), blocked (no access at all), regular.
+#config ip_binding
+#	option mac '00:11:22:33:44:55'
+#	option address '192.168.10.50'
+#	option type 'bypassed'
+#	option server 'all'

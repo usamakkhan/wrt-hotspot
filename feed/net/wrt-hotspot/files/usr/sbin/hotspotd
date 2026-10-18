@@ -30,7 +30,7 @@ if (!obj) {
 
 let cfg = core.config();
 
-let poll, sync;
+let poll, sync, resolve;
 
 poll = uloop.timer(cfg.global.poll_interval * 1000, function() {
 	try {
@@ -46,6 +46,12 @@ poll = uloop.timer(cfg.global.poll_interval * 1000, function() {
 sync = uloop.timer(cfg.global.db_sync_interval * 1000, function() {
 	core.sync_db();
 	sync.set(core.config().global.db_sync_interval * 1000);
+});
+
+// Keep walled-garden host sets fresh (essential without dnsmasq-full).
+resolve = uloop.timer(cfg.global.resolve_interval * 1000, function() {
+	core.resolve();
+	resolve.set(core.config().global.resolve_interval * 1000);
 });
 
 // Re-resolve devices when the hotspot networks go up/down.

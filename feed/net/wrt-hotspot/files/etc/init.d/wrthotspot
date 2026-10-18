@@ -7,11 +7,14 @@ USE_PROCD=1
 PORTAL_DIR=/usr/share/wrthotspot
 
 start_service() {
-	local enabled port
+	local enabled port https_port cert key
 
 	config_load wrthotspot
 	config_get_bool enabled global enabled 1
 	config_get port global portal_port 8002
+	config_get https_port global https_port $((port + 1))
+	config_get cert global ssl_certificate
+	config_get key global ssl_key
 
 	if [ "$enabled" != 1 ]; then
 		# Disabled: open the network again by removing our table.
@@ -32,8 +35,21 @@ start_service() {
 		-h "$PORTAL_DIR/pages/default" \
 		-o / -O "$PORTAL_DIR/portal.uc" \
 		-n 32 -N 256 -t 15 -T 15
+
+	# HTTPS login (login_by https, RFC 8908 API) needs a certificate and a
+	# TLS library for uhttpd (libustream-mbedtls / -openssl / -wolfssl).
+	if [ -n "$cert" ] && [ -f "$cert" ] && [ -f "$key" ]; then
+		if [ -e /lib/libustream-ssl.so ] || [ -e /usr/lib/libustream-ssl.so ]; then
+			procd_append_param command \
+				-s "0.0.0.0:$https_port" -s "[::]:$https_port" -C "$cert" -K "$key"
+		else
+			echo "wrthotspot: certificate configured but no libustream-* TLS library installed" >&2
+		fi
+	fi
+
 	procd_set_param respawn 3600 5 0
 	procd_set_param stderr 1
+	procd_set_param file "$cert" "$key"
 	procd_close_instance
 }
 
@@ -43,7 +59,10 @@ stop_service() {
 	return 0
 }
 
+# `start` lets procd restart only instances whose command line changed
+# (e.g. a new certificate); the daemon itself reloads in place.
 reload_service() {
+	start
 	ubus call wrthotspot reload >/dev/null 2>&1 || restart
 }
 
