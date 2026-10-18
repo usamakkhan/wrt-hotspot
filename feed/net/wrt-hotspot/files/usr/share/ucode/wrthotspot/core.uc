@@ -8,11 +8,13 @@ import { md5 } from 'digest';
 import * as nft from 'wrthotspot.nft';
 import * as dns from 'wrthotspot.dns';
 import * as radius from 'wrthotspot.radius';
+import * as shaper from 'wrthotspot.shaper';
+import * as sched from 'wrthotspot.limits';
 import * as users_db from 'wrthotspot.users';
 import * as hosts_mod from 'wrthotspot.hosts';
 import { load as load_config } from 'wrthotspot.config';
 import {
-	log, set_log_level, normalize_mac, normalize_ip, random_bytes, random_hex,
+	log, set_log_level, normalize_mac, normalize_ip, random_bytes, random_hex, run,
 	read_json, write_atomic, mkdir_p, fmt_duration, fmt_bytes
 } from 'wrthotspot.util';
 
@@ -69,6 +71,9 @@ export function create(opts) {
 	let dev_info = {};		// dev -> { ip4 } (NAS-IP-Address)
 	let rad = radius.client();
 	let coa = null;
+	let setup_shaper, reapply_rates;	// defined below, used by self.reload
+	let shp = null;			// shaper backend: tc object, 'nft' or null (off)
+	let polls = 0;
 	let try_mac_cookie;		// defined below, used by self.client
 	let auto_login;
 	let mac_tried = {};		// mac -> last automatic MAC login attempt
@@ -307,10 +312,12 @@ export function create(opts) {
 			hosts.set_devices(devices);
 
 		setup_radius();
+		setup_shaper();
 
 		// Bindings and walled garden may have changed: always rebuild.
 		let err = self.rebuild();
 		apply_dns();
+		reapply_rates();
 		return err;
 	};
 
@@ -337,7 +344,7 @@ export function create(opts) {
 			ifaces: keys(devices),
 			devices,
 			port: cfg.global.portal_port,
-			sessions: map(values(sessions), (s) => ({ slot: s.slot, mac: s.mac })),
+			sessions: map(values(sessions), (s) => ({ slot: s.slot, mac: s.mac, lim: s.nft_lim })),
 			bindings: cfg.ip_bindings,
 			walled_garden: cfg.walled_garden,
 			wg_ttl: cfg.global.walled_garden_ttl,
@@ -444,6 +451,8 @@ export function create(opts) {
 			ipv4: h ? sort(keys(h.ip4)) : [], ipv6: h ? sort(keys(h.ip6)) : [],
 			limits: s.limits,
 			rate_limit: s.rate_limit ?? '',
+			bursting: s.bursting,
+			avg_bps: s.avg,
 			auth: s.radius ? 'radius' : 'local',
 			accounting: !!s.acct,
 		};
@@ -640,6 +649,215 @@ export function create(opts) {
 		rad.accounting(a, null);
 	}
 
+	/* ---------- rate limits & scheduled limitations ---------- */
+
+	function fail(code, error) {
+		return { ok: false, code, error };
+	}
+
+
+	// 0 means unlimited: the smaller of two limits.
+	function min_lim(a, b) {
+		if (!a)
+			return b;
+
+		if (!b)
+			return a;
+
+		return min(a, b);
+	}
+
+	setup_shaper = function() {
+		let want = cfg.global.shaper;
+
+		if (shp && shp != 'nft')
+			shp.teardown();
+
+		shp = null;
+
+		// Remove tc trees an earlier run may have left behind (backend switch).
+		if (want != 'tc' && want != 'auto' && run('tc -V').code == 0)
+			shaper.tc_backend(cfg.global.state_dir).teardown(keys(devices));
+
+		if (want == 'off' || !length(keys(devices)))
+			return;
+
+		if (want == 'tc' || want == 'auto') {
+			if (shaper.tc_available()) {
+				let b = shaper.tc_backend(cfg.global.state_dir);
+				let err = b.setup(keys(devices), cfg.global.shaper_capacity);
+
+				if (!err) {
+					shp = b;
+					log('info', 'Rate limiting: tc HTB on %d device(s)', length(keys(devices)));
+					return;
+				}
+
+				log('error', 'tc shaper: %s', err);
+				b.teardown();
+			}
+			else if (want == 'tc') {
+				log('error', 'shaper=tc but tc, sch_htb or cls_flower are not available');
+			}
+		}
+
+		log('info', 'Rate limiting: nftables policing');
+		shp = 'nft';
+	};
+
+	function active_limitations(profile, now) {
+		let tm = localtime(now);
+
+		return filter(map(user_profile(profile).limitations ?? [], (n) => cfg.limitations[n]),
+			(l) => l && sched.window_active(l, tm));
+	}
+
+	// Scheduled limitations at login: access window, per-period quotas.
+	// -> { error } or { max_uptime, bytes_in, bytes_out, bytes_total, periods }
+	function limitation_check(profile, username, user, now) {
+		let up = user_profile(profile);
+
+		if (!length(up.limitations ?? []))
+			return { periods: [] };
+
+		let act = active_limitations(profile, now);
+
+		if (!length(act))
+			return { error: fail('schedule', 'access is not allowed at this time') };
+
+		// Online until the last of the currently open windows closes.
+		let tm = localtime(now);
+		let left = 0, forever = false;
+
+		for (let l in act) {
+			let w = sched.window_left(l, tm);
+
+			if (w == null)
+				forever = true;
+			else
+				left = max(left, w);
+		}
+
+		let out = { max_uptime: forever ? 0 : left, bytes_in: 0, bytes_out: 0, bytes_total: 0, periods: [] };
+
+		// Quotas are tracked for local users; RADIUS servers keep their own.
+		if (!user)
+			return out;
+
+		for (let l in act) {
+			if (!l.has_quota)
+				continue;
+
+			let start = sched.period_start(l.reset, now, l.reset_at);
+			let u = users.period_used(username, l.name, start);
+
+			if (l.uptime_limit && u.uptime >= l.uptime_limit)
+				return { error: fail('uptime-limit', 'uptime limit reached for this period') };
+
+			if ((l.download_limit && u.bytes_out >= l.download_limit) ||
+			    (l.upload_limit && u.bytes_in >= l.upload_limit) ||
+			    (l.transfer_limit && u.bytes_in + u.bytes_out >= l.transfer_limit))
+				return { error: fail('traffic-limit', 'traffic limit reached for this period') };
+
+			out.max_uptime = min_lim(out.max_uptime, l.uptime_limit ? l.uptime_limit - u.uptime : 0);
+			out.bytes_out = min_lim(out.bytes_out, l.download_limit ? l.download_limit - u.bytes_out : 0);
+			out.bytes_in = min_lim(out.bytes_in, l.upload_limit ? l.upload_limit - u.bytes_in : 0);
+			out.bytes_total = min_lim(out.bytes_total, l.transfer_limit ? l.transfer_limit - u.bytes_in - u.bytes_out : 0);
+			push(out.periods, { name: l.name, start });
+		}
+
+		return out;
+	}
+
+	// The rate limit in force: RADIUS/CoA, else the first active scheduled
+	// limitation with one, else the user profile.
+	function session_rate(s) {
+		if (s.radius?.rate_limit)
+			return s.radius.rate_limit;
+
+		for (let l in active_limitations(s.profile, time()))
+			if (l.rate_limit)
+				return l.rate_limit;
+
+		return user_profile(s.profile).rate_limit ?? '';
+	}
+
+	function apply_rate(s, force) {
+		let str = session_rate(s);
+		let p = shaper.parse_rate_limit(str);
+
+		if (str != '' && !p && s.rate_limit != str)
+			log('warn', 'Ignoring invalid rate limit "%s" for %s', str, s.user);
+
+		s.rate_limit = str;
+
+		if (!shp)
+			return;
+
+		// Burst is allowed until the window average says otherwise.
+		s.bursting ??= { rx: true, tx: true };
+
+		let ceil = p ? { rx: shaper.effective_ceil(p.rx, s.bursting.rx), tx: shaper.effective_ceil(p.tx, s.bursting.tx) } : null;
+		let key = p ? sprintf('%s|%d|%d', str, ceil.rx, ceil.tx) : '';
+
+		if (!force && key == (s.shaped ?? ''))
+			return;
+
+		s.shaped = key;
+
+		if (shp == 'nft') {
+			s.nft_lim = p ? { up: shaper.nft_limit(ceil.rx), down: shaper.nft_limit(ceil.tx) } : null;
+			exec(nft.session_limit_cmds(s.slot, s.nft_lim));
+			return;
+		}
+
+		if (s.nft_lim) {
+			s.nft_lim = null;
+			exec(nft.session_limit_cmds(s.slot, null));
+		}
+
+		let err = p ? shp.set_session(s.dev, s.slot, s.mac, p, ceil) : shp.del_session(s.dev, s.slot);
+
+		if (err)
+			log('warn', 'Rate limit for %s: %s', s.user, err);
+	}
+
+	function remove_rate(s) {
+		if (shp && shp != 'nft')
+			shp.del_session(s.dev, s.slot);
+	}
+
+	reapply_rates = function() {
+		for (let slot, s in sessions)
+			apply_rate(s, true);
+	};
+
+	// MikroTik burst: average over burst-time below burst-threshold -> burst
+	// rate allowed, otherwise max-limit. Also picks up rate changes (CoA,
+	// limitation windows opening or closing).
+	function shape_poll(s, now) {
+		let p = shaper.parse_rate_limit(s.rate_limit);
+
+		if (p && (p.rx.burst_rate > p.rx.rate || p.tx.burst_rate > p.tx.rate)) {
+			let t = totals(s);
+			let win = max(p.rx.burst_time, p.tx.burst_time);
+
+			s.bh ??= [ [ s.started, 0, 0 ] ];
+			push(s.bh, [ now, t.bytes_in, t.bytes_out ]);
+
+			while (length(s.bh) > 2 && now - s.bh[1][0] > win)
+				shift(s.bh);
+
+			let rx = shaper.window_avg(map(s.bh, (x) => [ x[0], x[1] ]), p.rx.burst_time, now);
+			let tx = shaper.window_avg(map(s.bh, (x) => [ x[0], x[2] ]), p.tx.burst_time, now);
+
+			s.bursting = { rx: shaper.burst_allowed(p.rx, rx), tx: shaper.burst_allowed(p.tx, tx) };
+			s.avg = { rx, tx };
+		}
+
+		apply_rate(s, false);
+	}
+
 	/* ---------- sessions ---------- */
 
 	// authz: RADIUS authorization (null for local users); id: Acct-Session-Id
@@ -672,6 +890,17 @@ export function create(opts) {
 			next_interim: interim ? now + interim : 0,
 		};
 
+		let lc = limitation_check(profile, username, user, now);
+
+		if (lc.error)
+			return [ null, lc.error ];
+
+		s.limits.max_uptime = min_lim(s.limits.max_uptime, lc.max_uptime);
+		s.limits.bytes_in = min_lim(s.limits.bytes_in, lc.bytes_in);
+		s.limits.bytes_out = min_lim(s.limits.bytes_out, lc.bytes_out);
+		s.limits.bytes_total = min_lim(s.limits.bytes_total, lc.bytes_total);
+		s.periods = lc.periods;
+
 		let err = exec(nft.session_add_cmds(slot, mac));
 		if (err)
 			return [ null, 'dataplane error' ];
@@ -684,12 +913,9 @@ export function create(opts) {
 		event('login', { user: username, mac, server, session_id: s.id, login_by });
 		run_hook(user_profile(profile).on_login, hook_env(s));
 		acct_send(s, radius.ACCT_START);
+		apply_rate(s, true);
 
 		return [ s, null ];
-	}
-
-	function fail(code, error) {
-		return { ok: false, code, error };
 	}
 
 	// Last step of every user login: concurrent-session limit, session,
@@ -704,7 +930,7 @@ export function create(opts) {
 		let res = start_session(mac, server, username, profile, method, 0, user, authz, id);
 
 		if (!res[0])
-			return fail('internal', res[1]);
+			return (type(res[1]) == 'object') ? res[1] : fail('internal', res[1]);
 
 		let out = { ok: true, session: self.session_view(res[0]) };
 
@@ -901,7 +1127,11 @@ export function create(opts) {
 				return fail('trial-expired', 'free trial used up, try again later');
 
 			let res = start_session(mac, server, `T-${mac}`, sp.trial_user_profile, 'trial', remaining, null);
-			return res[0] ? { ok: true, session: self.session_view(res[0]) } : fail('internal', res[1]);
+
+			if (!res[0])
+				return (type(res[1]) == 'object') ? res[1] : fail('internal', res[1]);
+
+			return { ok: true, session: self.session_view(res[0]) };
 		}
 
 		if (method == 'cookie') {
@@ -1015,6 +1245,8 @@ export function create(opts) {
 				s.interim = a.interim;
 				s.next_interim = time() + a.interim;
 			}
+
+			apply_rate(s, false);
 		}
 
 		log('info', 'RADIUS CoA from %s applied to %d session(s)', srv.address, length(matched));
@@ -1033,6 +1265,9 @@ export function create(opts) {
 		}
 		else {
 			users.add_usage(s.user, uptime, t.bytes_in, t.bytes_out);
+
+			for (let p in s.periods ?? [])
+				users.add_period_usage(s.user, p.name, p.start, uptime, t.bytes_in, t.bytes_out);
 		}
 
 		if (!(cause in COOKIE_KEEP))
@@ -1061,6 +1296,7 @@ export function create(opts) {
 				s.k = kc[s.slot];
 
 			finish(s, item[1]);
+			remove_rate(s);
 			push(cmds, ...nft.session_del_cmds(s.slot, s.mac));
 			delete by_mac[s.mac];
 			delete sessions[s.slot];
@@ -1142,6 +1378,8 @@ export function create(opts) {
 				s.next_interim = now + s.interim;
 			}
 
+			shape_poll(s, now);
+
 			let t = totals(s);
 			let l = s.limits;
 			let uptime = now - s.started;
@@ -1166,6 +1404,18 @@ export function create(opts) {
 			self.logout_many(expired);
 		else
 			checkpoint();
+
+		// Interfaces re-created by netifd lose their qdiscs: rebuild then.
+		if (shp && shp != 'nft' && (++polls % 6) == 0) {
+			for (let dev in keys(devices)) {
+				if (!shp.healthy(dev)) {
+					log('warn', 'Shaper on %s is gone, rebuilding', dev);
+					setup_shaper();
+					reapply_rates();
+					break;
+				}
+			}
+		}
 
 		// Forget unauthorized hosts after the server's idle-timeout.
 		hosts.prune((server) => cfg.servers[server]?.idle_timeout ?? 0, (mac) => !!by_mac[mac]);
@@ -1238,6 +1488,8 @@ export function create(opts) {
 
 		let err = self.rebuild();
 		apply_dns();
+		setup_shaper();
+		reapply_rates();
 
 		if (opts?.no_netlink != true)
 			hosts.start();
@@ -1257,6 +1509,11 @@ export function create(opts) {
 		let list = map(keys(sessions), (slot) => [ slot, CAUSE.NAS_REBOOT ]);
 		self.logout_many(list);
 		nft.delete_table();
+
+		if (shp && shp != 'nft')
+			shp.teardown();
+
+		shp = null;
 		need_rebuild = true;
 	};
 

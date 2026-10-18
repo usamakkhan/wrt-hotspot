@@ -3,8 +3,8 @@
 A MikroTik-Hotspot-class captive portal for OpenWrt 24.10+, with full IPv6 support, RADIUS (incl. CoA),
 vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 
-Status: **Phases 1–3 working**, tested end to end on OpenWrt 25.12.5 x86-64 against FreeRADIUS 3.2.10
-(114/114 checks).
+Status: **Phases 1–4 working**, tested end to end on OpenWrt 25.12.5 x86-64 against FreeRADIUS 3.2.10,
+with rates measured by iperf3 (137/137 checks).
 
 - [docs/research.md](docs/research.md) — stack, prior art, dataplane and MikroTik feature research
 - [docs/architecture.md](docs/architecture.md) — architecture, phases and MikroTik parity matrix
@@ -37,9 +37,24 @@ Status: **Phases 1–3 working**, tested end to end on OpenWrt 25.12.5 x86-64 ag
   Reply-Message, Class, Mikrotik-Group, Mikrotik-Rate-Limit, Mikrotik-Recv/Xmit/Total-Limit (+gigawords),
   WISPr-Bandwidth-Max-Up/Down, WISPr-Session-Terminate-Time / -End-Of-Day. Cookie logins of RADIUS
   users replay the stored authorization instead of keeping passwords.
+- Per-user rate limits in MikroTik syntax (`rx/tx`, burst rate/threshold/time, priority, limit-at) from
+  user profiles, scheduled limitations, RADIUS (`Mikrotik-Rate-Limit`, WISPr bandwidth) and CoA, changed
+  live. With `wrt-hotspot-shaper` installed: HTB + fq_codel per user and direction, classified by MAC
+  (IPv4 and IPv6 alike), uploads via IFB, MikroTik burst semantics (average over burst-time vs threshold,
+  evaluated every poll). Without it: nftables policing (rate only).
+- Scheduled limitations (User Manager style): weekday + time windows (overnight too), a rate limit per
+  window, and download/upload/transfer/uptime quotas per hourly/daily/weekly/monthly period. Logins outside
+  every window are refused and sessions end when the window closes.
 - `wrthotspot` CLI: `setup <network>` wizard (zone, rules, DHCP/RA, offload off, server), `cert`, `cookies`, …
 
-Optional packages: `dnsmasq-full` (walled-garden subdomains), `libustream-mbedtls` (HTTPS login).
+Optional packages: `wrt-hotspot-shaper` (tc HTB shaping), `dnsmasq-full` (walled-garden subdomains),
+`libustream-mbedtls` (HTTPS login).
+
+Measured on the test VM (iperf3 through the hotspot, steady state): `1M/4M` → 3.88 / 3.77 Mbit/s down
+(IPv4 / IPv6) and 0.94 Mbit/s up; a 512k limitation → 0.52 Mbit/s; nftables policing at 4M → 3.98 Mbit/s;
+`1M/1M 4M/4M 768k/768k 8/8` → ~3.1 Mbit/s in the first second, then ~1 Mbit/s; unlimited → 8+ Gbit/s.
+TCP goodput through HTB is about 95% of the configured rate (TCP/IP + Ethernet headers); short tests read
+lower because of TCP's ramp-up.
 
 Note on IPv6 IP bindings: a binding by single IPv6 address only matches that address, and devices
 change addresses (SLAAC, privacy extensions). Bind IPv6 devices by MAC.
@@ -50,7 +65,7 @@ change addresses (SLAAC, privacy extensions). Bind IPv6 devices by MAC.
 feed/net/wrt-hotspot/           OpenWrt package (add feed/ as a src-link feed)
   files/usr/sbin/hotspotd       daemon (ucode, uloop, ubus object "wrthotspot")
   files/usr/sbin/wrthotspot     CLI
-  files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, dns, radius, template, util
+  files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, dns, radius, shaper, limits, template, util
   files/usr/share/wrthotspot/   portal.uc (uhttpd handler) and default pages
 tests/unit/                     ucode unit tests        (sh tests/run-unit.sh)
 tests/integration/              end-to-end netns test   (sh tests/integration/netns-test.sh)

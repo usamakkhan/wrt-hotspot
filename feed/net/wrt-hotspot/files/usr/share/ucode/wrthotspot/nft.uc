@@ -174,6 +174,23 @@ export function ruleset(state) {
 	r += `\tmap cnt_up {\n\t\ttype mark : counter\n${elements(map(sessions, (s) => `${slot_mark(s.slot)} : "cu_${s.slot}"`))}\t}\n`;
 	r += `\tmap cnt_down {\n\t\ttype mark : counter\n${elements(map(sessions, (s) => `${slot_mark(s.slot)} : "cd_${s.slot}"`))}\t}\n`;
 
+	// nft shaper backend: per-session policers ({ up, down } = { rate, burst } in bytes).
+	let lim = { up: [], down: [] };
+
+	for (let s in sessions) {
+		for (let d in [ 'up', 'down' ]) {
+			let l = s.lim?.[d];
+
+			if (l) {
+				r += `\tlimit l${substr(d, 0, 1)}_${s.slot} { rate over ${l.rate} bytes/second burst ${l.burst} bytes }\n`;
+				push(lim[d], `${slot_mark(s.slot)} : "l${substr(d, 0, 1)}_${s.slot}"`);
+			}
+		}
+	}
+
+	r += `\tmap lim_up {\n\t\ttype mark : limit\n${elements(lim.up)}\t}\n`;
+	r += `\tmap lim_down {\n\t\ttype mark : limit\n${elements(lim.down)}\t}\n`;
+
 	r += `\tchain blocked {\n`;
 	r += `\t\tether saddr @block_mac drop\n`;
 	r += `\t\tip saddr @block4 drop\n`;
@@ -242,11 +259,13 @@ export function ruleset(state) {
 	r += `\t\tjump bypassed\n`;
 	r += `\t\tct mark and ${MARK_MASK} != @active jump unauth\n`;
 	r += `\t\tcounter name ct mark and ${MARK_MASK} map @cnt_up\n`;
+	r += `\t\tlimit name ct mark and ${MARK_MASK} map @lim_up drop\n`;
 	r += `\t}\n`;
 
 	r += `\tchain to_client {\n`;
 	r += `\t\tct mark and ${MARK_MASK} != @active return\n`;
 	r += `\t\tcounter name ct mark and ${MARK_MASK} map @cnt_down\n`;
+	r += `\t\tlimit name ct mark and ${MARK_MASK} map @lim_down drop\n`;
 	r += `\t}\n`;
 
 	r += `\tchain unauth {\n`;
@@ -287,7 +306,31 @@ export function session_del_cmds(slot, mac) {
 		`destroy element ${TABLE} cnt_down { ${m} }`,
 		`destroy counter ${TABLE} cu_${slot}`,
 		`destroy counter ${TABLE} cd_${slot}`,
+		`destroy element ${TABLE} lim_up { ${m} }`,
+		`destroy element ${TABLE} lim_down { ${m} }`,
+		`destroy limit ${TABLE} lu_${slot}`,
+		`destroy limit ${TABLE} ld_${slot}`,
 	];
+};
+
+// nft shaper backend: (re)set a session's policers. lim = { up, down } with
+// { rate, burst } in bytes; either may be null (unlimited).
+export function session_limit_cmds(slot, lim) {
+	let m = slot_mark(slot);
+	let cmds = [];
+
+	for (let d in [ 'up', 'down' ]) {
+		let n = `l${substr(d, 0, 1)}_${slot}`;
+
+		push(cmds, `destroy element ${TABLE} lim_${d} { ${m} }`, `destroy limit ${TABLE} ${n}`);
+
+		if (lim?.[d])
+			push(cmds,
+				`add limit ${TABLE} ${n} { rate over ${lim[d].rate} bytes/second burst ${lim[d].burst} bytes }`,
+				`add element ${TABLE} lim_${d} { ${m} : "${n}" }`);
+	}
+
+	return cmds;
 };
 
 // Refresh resolved walled-garden addresses: destroy + add in one batch, so

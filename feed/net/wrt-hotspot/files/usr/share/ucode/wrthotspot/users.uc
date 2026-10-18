@@ -118,9 +118,35 @@ export function create(db_dir) {
 				return false;
 
 			u.used = { uptime: 0, bytes_in: 0, bytes_out: 0 };
+			delete u.periods;
 			dirty = true;
 			db.save(true);
 			return true;
+		},
+
+		// Usage within a limitation's current quota period (start = period
+		// start); a newer period starts from zero.
+		period_used: function(name, lim, start) {
+			let p = users[name]?.periods?.[lim];
+			return (p && p.start == start) ? p : { start, uptime: 0, bytes_in: 0, bytes_out: 0 };
+		},
+
+		add_period_usage: function(name, lim, start, uptime, bytes_in, bytes_out) {
+			let u = users[name];
+
+			if (!u)
+				return;
+
+			u.periods ??= {};
+
+			let p = u.periods[lim];
+			if (!p || p.start != start)
+				p = u.periods[lim] = { start, uptime: 0, bytes_in: 0, bytes_out: 0 };
+
+			p.uptime += uptime;
+			p.bytes_in += bytes_in;
+			p.bytes_out += bytes_out;
+			dirty = true;
 		},
 
 		add_usage: function(name, uptime, bytes_in, bytes_out) {

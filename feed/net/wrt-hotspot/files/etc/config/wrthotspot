@@ -21,6 +21,11 @@ config global 'global'
 	# RFC 5176 CoA / Disconnect listener (0 = off). For a RADIUS server
 	# outside the router, allow udp/3799 from it in the firewall.
 	option coa_port '3799'
+	# Rate limits: auto = tc HTB when wrt-hotspot-shaper is installed,
+	# otherwise nftables policing; or force 'tc', 'nft', 'off'.
+	option shaper 'auto'
+	# Root rate of the HTB trees; keep it above the real link speed.
+	option shaper_capacity '10G'
 
 # RADIUS servers, tried in order. Used by server profiles with use_radius.
 #config radius 'main'
@@ -74,6 +79,10 @@ config user_profile
 	option status_autorefresh '1m'
 	option add_mac_cookie '1'
 	option mac_cookie_timeout '3d'
+	# MikroTik syntax, rx = upload, tx = download (bits/s, k/M/G):
+	# rx/tx [rx-burst/tx-burst [rx-threshold/tx-threshold [rx-time/tx-time [priority [rx-min/tx-min]]]]]
+	#option rate_limit '2M/10M 4M/20M 1500k/7M 16/16 8 512k/2M'
+	#list limitation 'office'
 
 # Walled garden: reachable without logging in. dst_host covers the domain
 # and its subdomains (subdomains need dnsmasq-full).
@@ -91,3 +100,18 @@ config user_profile
 #	option address '192.168.10.50'
 #	option type 'bypassed'
 #	option server 'all'
+
+# Scheduled limitations (User Manager style), listed in user profiles with
+# `list limitation`. While a profile has limitations, users may only be
+# online inside one of their windows; quotas count per reset period.
+#config limitation 'office'
+#	option weekdays 'mon-fri'
+#	option from_time '08:00'
+#	option till_time '18:00'		# till < from = overnight window
+#	option rate_limit '2M/4M'		# overrides the profile's rate_limit
+#	option download_limit '1G'
+#	option upload_limit '200M'
+#	option transfer_limit '1G'
+#	option uptime_limit '4h'
+#	option reset 'daily'			# never, hourly, daily, weekly, monthly
+#	option reset_time '00:00'

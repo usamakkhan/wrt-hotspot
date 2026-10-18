@@ -6,7 +6,11 @@ let devices = { 'br-hs': 'hs1' };
 
 print(nft.ruleset({
 	ifaces: keys(devices), devices, port: 8002,
-	sessions: [ { slot: 1, mac: '02:00:00:00:00:10' }, { slot: 2, mac: '02:00:00:00:00:11' } ],
+	sessions: [
+		{ slot: 1, mac: '02:00:00:00:00:10', lim: { up: { rate: 64000, burst: 32000 }, down: { rate: 250000, burst: 125000 } } },
+		{ slot: 2, mac: '02:00:00:00:00:11', lim: { up: null, down: { rate: 125000, burst: 62500 } } },
+		{ slot: 3, mac: '02:00:00:00:00:12' },
+	],
 	bindings: [
 		{ type: 'bypassed', server: 'all', mac: '02:00:00:00:00:01', address: null },
 		{ type: 'bypassed', server: 'all', mac: null, address: { family: 4, cidr: '10.0.0.0/24' } },

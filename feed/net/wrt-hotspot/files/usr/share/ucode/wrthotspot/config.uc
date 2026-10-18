@@ -3,6 +3,8 @@
 
 import { cursor } from 'uci';
 import { parse_duration, parse_size, to_bool, as_list, normalize_mac, log } from 'wrthotspot.util';
+import { parse_rate_limit, parse_rate } from 'wrthotspot.shaper';
+import * as limits from 'wrthotspot.limits';
 
 const LOGIN_METHODS = [ 'mac', 'cookie', 'http-chap', 'http-pap', 'https', 'trial', 'mac-cookie' ];
 
@@ -68,6 +70,7 @@ function user_profile(s) {
 		mac_cookie_timeout: dur(s.mac_cookie_timeout, '3d'),
 		on_login: s.on_login ?? '',
 		on_logout: s.on_logout ?? '',
+		limitations: as_list(s.limitation),
 	};
 }
 
@@ -209,9 +212,14 @@ export function load(confdir) {
 			walled_garden_ttl: dur(g.walled_garden_ttl, '1h') || 3600,
 			// RFC 5176 CoA / Disconnect-Request listener; 0 disables it.
 			coa_port: int(g.coa_port ?? 3799),
+			// Rate limiting: auto (tc if available, else nft), tc, nft or off.
+			shaper: g.shaper ?? 'auto',
+			// Root class rate of the tc trees; keep above the real link speed.
+			shaper_capacity: parse_rate(g.shaper_capacity ?? '10G') || 10000000000,
 		},
 		servers: {},
 		radius: [],
+		limitations: {},
 		walled_garden: [],
 		ip_bindings: [],
 		server_profiles: {},
@@ -233,6 +241,33 @@ export function load(confdir) {
 
 		cfg.servers[srv.name] = srv;
 	});
+
+	c.foreach('wrthotspot', 'limitation', (s) => {
+		let r = limits.parse(s, parse_duration, parse_size);
+
+		if (r[0] && r[0].rate_limit != '' && !parse_rate_limit(r[0].rate_limit))
+			r = [ null, `invalid rate_limit "${r[0].rate_limit}"` ];
+
+		if (r[0])
+			cfg.limitations[r[0].name] = r[0];
+		else
+			log('warn', 'Limitation %s ignored: %s', s['.name'], r[1]);
+	});
+
+	for (let name, up in cfg.user_profiles) {
+		if (up.rate_limit != '' && !parse_rate_limit(up.rate_limit)) {
+			log('warn', 'User profile %s: invalid rate_limit "%s" ignored', name, up.rate_limit);
+			up.rate_limit = '';
+		}
+
+		up.limitations = filter(up.limitations, (l) => {
+			if (cfg.limitations[l])
+				return true;
+
+			log('warn', 'User profile %s: unknown limitation %s ignored', name, l);
+			return false;
+		});
+	}
 
 	c.foreach('wrthotspot', 'radius', (s) => {
 		if (!to_bool(s.enabled ?? '1'))

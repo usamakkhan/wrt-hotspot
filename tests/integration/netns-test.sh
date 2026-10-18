@@ -136,7 +136,9 @@ setup() {
 	I ip -6 route add default via fd98::1
 	mkdir -p /tmp/hsinet-www
 	echo "hello from the internet" > /tmp/hsinet-www/index.html
+	dd if=/dev/zero of=/tmp/hsinet-www/big.bin bs=1k count=200 2>/dev/null
 	I uhttpd -p 0.0.0.0:80 -p '[::]:80' -p 0.0.0.0:8081 -p '[::]:8081' -h /tmp/hsinet-www
+	command -v iperf3 >/dev/null && I iperf3 -s -D
 	# An upstream DNS server for wg.test, so answers reach the router's
 	# dnsmasq as forwarded replies (nftset= ignores its own address= records).
 	I dnsmasq --conf-file=/dev/null --port=53 --listen-address=10.98.0.2 --bind-interfaces \
@@ -366,6 +368,103 @@ check "session shows mac-cookie login" sh -c "wrthotspot sessions | grep carol |
 wrthotspot logout carol >/dev/null
 check_not "admin logout drops the MAC cookie" sh -c "wrthotspot cookies | grep mac | grep -q carol"
 
+echo "== rate limits"
+# Mbit/s measured by iperf3 from the client (-R = download, -O = skip TCP ramp-up).
+# Steady-state TCP goodput through HTB is ~95% of the rate (header overhead).
+mbps() { C iperf3 -c "$@" -J 2>/dev/null | jsonfilter -e '@.end.sum_received.bits_per_second' | awk '{ printf "%.2f", $1 / 1000000 }'; }
+between() { awk -v v="$1" -v lo="$2" -v hi="$3" 'BEGIN { exit !(v >= lo && v <= hi) }'; }
+check_rate() { d=$1; v=$2; lo=$3; hi=$4; if between "$v" "$lo" "$hi"; then ok "$d ($v Mbit/s)"; else bad "$d ($v Mbit/s, want $lo-$hi)"; fi; }
+
+if command -v iperf3 >/dev/null && command -v tc >/dev/null; then
+	uci set wrthotspot.rateprof=user_profile
+	uci set wrthotspot.rateprof.rate_limit='1M/4M'
+	uci set wrthotspot.rateprof.keepalive_timeout=0
+	uci set wrthotspot.burstprof=user_profile
+	uci set wrthotspot.burstprof.rate_limit='1M/1M 4M/4M 768k/768k 8/8'
+	uci set wrthotspot.burstprof.keepalive_timeout=0
+	uci commit wrthotspot
+	reload_hs
+	wrthotspot user add rate1 password=x profile=rateprof >/dev/null
+	wrthotspot user add burst1 password=x profile=burstprof >/dev/null
+
+	check "tc HTB tree on the hotspot device" sh -c "tc qdisc show dev br-hstest | grep -q 'htb 1:' && tc filter show dev br-hstest ingress | grep -q hsifb"
+	post_has 'username=rate1&password=x' 'You are connected'
+	check "per-session class created" sh -c "tc class show dev br-hstest | grep -q 'ceil 4Mbit'"
+	check_rate "download limited to 4M (IPv4)" "$(mbps 10.98.0.2 -R -t 10 -O 3)" 3.6 4.05
+	check_rate "download limited to 4M (IPv6)" "$(mbps fd98::2 -R -t 10 -O 3)" 3.6 4.05
+	check_rate "upload limited to 1M" "$(mbps 10.98.0.2 -t 10 -O 3)" 0.9 1.02
+	wrthotspot logout rate1 >/dev/null
+	check_not "class removed on logout" sh -c "tc class show dev br-hstest | grep -q 'ceil 4Mbit'"
+	post_has 'username=alice&password=secret' 'You are connected'
+	v=$(mbps 10.98.0.2 -R -t 3)
+	if awk -v v="$v" 'BEGIN { exit !(v > 20) }'; then ok "user without rate limit is unshaped ($v Mbit/s)"; else bad "user without rate limit is unshaped ($v Mbit/s)"; fi
+	wrthotspot logout alice >/dev/null
+
+	post_has 'username=burst1&password=x' 'You are connected'
+	C iperf3 -c 10.98.0.2 -R -t 12 -i 1 -J 2>/dev/null > /tmp/hstest-burst.json
+	first=$(jsonfilter -i /tmp/hstest-burst.json -e '@.intervals[0].sum.bits_per_second' | awk '{ printf "%.2f", $1 / 1000000 }')
+	late=$(jsonfilter -i /tmp/hstest-burst.json -e '@.intervals[*].sum.bits_per_second' | tail -6 | awk '{ s += $1 } END { printf "%.2f", s / NR / 1000000 }')
+	check_rate "burst: first second at burst rate" "$first" 2.5 4.6
+	check_rate "burst: back to max-limit once the average passes the threshold" "$late" 0.6 1.4
+	rm -f /tmp/hstest-burst.json
+	wrthotspot logout burst1 >/dev/null
+
+	uci set wrthotspot.global.shaper=nft
+	uci commit wrthotspot
+	/etc/init.d/wrthotspot restart
+	sleep 4
+	wait_dns
+	check_not "nft backend: no tc tree" sh -c "tc qdisc show dev br-hstest | grep -q 'htb 1:'"
+	post_has 'username=rate1&password=x' 'You are connected'
+	check "nft backend: policers in the table" sh -c "nft list map inet wrthotspot lim_down | grep -q ld_"
+	check_rate "nft backend: download policed near 4M" "$(mbps 10.98.0.2 -R -t 10 -O 3)" 3.0 4.4
+	wrthotspot logout rate1 >/dev/null
+	check_not "nft backend: policer removed on logout" sh -c "nft list map inet wrthotspot lim_down | grep -q ld_"
+	uci set wrthotspot.global.shaper=auto
+	uci commit wrthotspot
+	/etc/init.d/wrthotspot restart
+	sleep 4
+	wait_dns
+else
+	skip "rate limit tests (need iperf3 and tc)"
+fi
+
+echo "== scheduled limitations"
+now=$(date +%s)
+hm() { date -d "@$1" +%H:%M; }
+uci set wrthotspot.open_now=limitation
+uci set wrthotspot.open_now.from_time="$(hm $((now - 3600)))"
+uci set wrthotspot.open_now.till_time="$(hm $((now + 600)))"
+uci set wrthotspot.open_now.rate_limit='512k/512k'
+uci set wrthotspot.open_now.transfer_limit=1M
+uci set wrthotspot.open_now.reset=daily
+uci set wrthotspot.closed_now=limitation
+uci set wrthotspot.closed_now.from_time="$(hm $((now + 7200)))"
+uci set wrthotspot.closed_now.till_time="$(hm $((now + 10800)))"
+uci set wrthotspot.schedprof=user_profile
+uci add_list wrthotspot.schedprof.limitation=open_now
+uci set wrthotspot.schedprof.keepalive_timeout=0
+uci set wrthotspot.nightprof=user_profile
+uci add_list wrthotspot.nightprof.limitation=closed_now
+uci commit wrthotspot
+reload_hs
+wrthotspot user add sched1 password=x profile=schedprof >/dev/null
+wrthotspot user add night1 password=x profile=nightprof >/dev/null
+
+check "login refused outside the window" post_has 'username=night1&password=x' 'access is not allowed at this time'
+check "login inside the window" post_has 'username=sched1&password=x' 'You are connected'
+check "session ends with the window (<= 10 min)" sh -c "t=\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='sched1'].limits.max_uptime\"); [ \$t -gt 0 ] && [ \$t -le 600 ]"
+check "limitation rate limit in force" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='sched1'].rate_limit\")\" = 512k/512k ]"
+command -v iperf3 >/dev/null && check_rate "limitation rate measured" "$(mbps 10.98.0.2 -R -t 10 -O 3)" 0.45 0.55
+for i in 1 2 3 4 5 6; do ccurl -o /dev/null http://10.98.0.2/big.bin; done
+poll_wait
+check_not "period quota ends the session" online4
+check "quota refused for the rest of the period" post_has 'username=sched1&password=x' 'traffic limit reached for this period'
+check "period usage stored" sh -c "grep -q open_now /etc/wrthotspot/users.json || (ubus call wrthotspot user_get '{\"name\":\"sched1\"}' | grep -q open_now)"
+wrthotspot user reset sched1 >/dev/null
+check "counter reset clears the period quota" post_has 'username=sched1&password=x' 'You are connected'
+wrthotspot logout sched1 >/dev/null
+
 echo "== RADIUS (FreeRADIUS on the router)"
 if command -v radiusd >/dev/null; then
 	RD=/etc/freeradius3
@@ -450,6 +549,7 @@ EOF
 	post_has 'username=radalice&password=radpw' 'You are connected'
 	out=$(printf 'User-Name = "radalice"\nSession-Timeout = 4\nMikrotik-Rate-Limit = "1M/1M"\nMessage-Authenticator = 0x00\n' | radclient -r1 -t3 127.0.0.1:3799 coa testing123 2>&1)
 	check "CoA acknowledged" sh -c "echo '$out' | grep -q 'CoA-ACK'"
+	command -v tc >/dev/null && check "CoA rate applied to the tc class" sh -c "sleep 3; tc class show dev br-hstest | grep -q 'ceil 1Mbit'"
 	check "CoA changed the rate limit" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radalice'].rate_limit\")\" = 1M/1M ]"
 	sleep 4
 	poll_wait

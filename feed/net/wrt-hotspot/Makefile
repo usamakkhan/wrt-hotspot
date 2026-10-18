@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wrt-hotspot
-PKG_VERSION:=0.1.0
+PKG_VERSION:=0.4.0
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_MAINTAINER:=Usama Khan
@@ -22,13 +22,31 @@ endef
 
 define Package/wrt-hotspot/description
   Captive portal hotspot for OpenWrt modelled on MikroTik Hotspot: local users,
-  trial, MAC and CHAP/PAP logins, per-user limits and accounting, MikroTik
-  compatible login pages, and full dual-stack (IPv4 + IPv6) client handling.
+  trial, MAC, cookie and CHAP/PAP/HTTPS logins, RADIUS with CoA, walled garden,
+  per-user limits, scheduled limitations, accounting, MikroTik compatible login
+  pages, and full dual-stack (IPv4 + IPv6) client handling. Without the
+  wrt-hotspot-shaper package, rate limits use nftables policing.
 endef
 
 define Package/wrt-hotspot/conffiles
 /etc/config/wrthotspot
 /etc/wrthotspot/
+endef
+
+# Meta package: everything the tc HTB shaper needs (fq_codel is built in).
+define Package/wrt-hotspot-shaper
+  SECTION:=net
+  CATEGORY:=Network
+  SUBMENU:=Captive Portals
+  TITLE:=Per-user traffic shaping (tc HTB) for wrt-hotspot
+  PKGARCH:=all
+  DEPENDS:=+wrt-hotspot +tc-full +kmod-sched-core +kmod-sched +kmod-sched-flower +kmod-ifb
+endef
+
+define Package/wrt-hotspot-shaper/description
+  Pulls in tc, HTB, flower, mirred and IFB so wrt-hotspot shapes each user
+  with HTB + fq_codel (MikroTik rate-limit incl. burst, priority, limit-at)
+  instead of policing with nftables.
 endef
 
 define Build/Compile
@@ -47,4 +65,9 @@ define Package/wrt-hotspot/install
 	$(INSTALL_DATA) ./files/usr/share/wrthotspot/pages/default/* $(1)/usr/share/wrthotspot/pages/default/
 endef
 
+define Package/wrt-hotspot-shaper/install
+	true
+endef
+
 $(eval $(call BuildPackage,wrt-hotspot))
+$(eval $(call BuildPackage,wrt-hotspot-shaper))
