@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$(identity) - Logged out</title>
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<div class="card">
+	<h1>You have logged out</h1>
+	<table>
+		<tr><td>User</td><td>$(username)</td></tr>
+		<tr><td>Uptime</td><td>$(uptime)</td></tr>
+		<tr><td>Uploaded</td><td>$(bytes-in-nice)</td></tr>
+		<tr><td>Downloaded</td><td>$(bytes-out-nice)</td></tr>
+	</table>
+	<a class="btn" href="$(link-login-only)">Sign in again</a>
+</div>
+</body></html>

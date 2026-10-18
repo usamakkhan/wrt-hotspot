@@ -1,0 +1,71 @@
+#!/usr/bin/ucode -S
+// hotspotd: control-plane daemon for the WrtHotspot captive portal.
+'use strict';
+
+import * as uloop from 'uloop';
+import * as ubus from 'ubus';
+import * as core_mod from 'wrthotspot.core';
+import * as api from 'wrthotspot.api';
+import { log } from 'wrthotspot.util';
+
+uloop.init();
+
+let conn = ubus.connect();
+if (!conn) {
+	log('error', 'Cannot connect to ubus: %s', ubus.error());
+	exit(1);
+}
+
+let core = core_mod.create({ ubus: conn });
+let err = core.start();
+
+if (err)
+	log('error', 'Initial dataplane build failed: %s (will retry)', err);
+
+let obj = api.publish(conn, core);
+if (!obj) {
+	log('error', 'Cannot publish ubus object: %s', ubus.error());
+	exit(1);
+}
+
+let cfg = core.config();
+
+let poll, sync;
+
+poll = uloop.timer(cfg.global.poll_interval * 1000, function() {
+	try {
+		core.poll();
+	}
+	catch (e) {
+		log('error', 'poll: %s\n%s', e.message, e.stacktrace?.[0]?.context ?? '');
+	}
+
+	poll.set(core.config().global.poll_interval * 1000);
+});
+
+sync = uloop.timer(cfg.global.db_sync_interval * 1000, function() {
+	core.sync_db();
+	sync.set(core.config().global.db_sync_interval * 1000);
+});
+
+// Re-resolve devices when the hotspot networks go up/down.
+let iface_listener = conn.listener('network.interface', function(type, data) {
+	let srvs = core.config().servers;
+
+	for (let name, s in srvs) {
+		if (s.interface == data?.interface) {
+			core.reload();
+			break;
+		}
+	}
+});
+
+// uloop itself ends the loop on SIGTERM/SIGINT; SIGHUP reloads the config.
+if (uloop.signal)
+	uloop.signal('HUP', () => core.reload());
+
+log('info', 'hotspotd %s started', core_mod.VERSION);
+uloop.run();
+
+core.stop();
+log('info', 'hotspotd stopped');

@@ -1,0 +1,280 @@
+#!/usr/bin/ucode -S
+// wrthotspot: command line front-end for hotspotd.
+'use strict';
+
+import * as ubus from 'ubus';
+import { cursor } from 'uci';
+import { fmt_duration, fmt_bytes, run } from 'wrthotspot.util';
+
+const USAGE = `Usage: wrthotspot <command> [args]
+
+  status                      daemon status
+  sessions                    active sessions
+  hosts                       hosts seen on hotspot interfaces
+  users                       local users
+  user add <name> [k=v ...]   create/update a user (password=, profile=, mac=,
+                              limit_uptime=, limit_bytes_total=, server=, ...)
+  user set <name> [k=v ...]   same as add
+  user del <name>             delete a user (and log out its sessions)
+  user reset <name>           reset a user's usage counters
+  logout <ip|mac|user|id>     log out matching sessions
+  setup <network>             create firewall zone/rules + server for a network
+  check                       sanity checks (offloading, nftables, dnsmasq)
+  flush                       log everybody out and remove the dataplane
+`;
+
+let conn;
+
+function call(method, args) {
+	conn ??= ubus.connect();
+
+	if (!conn)
+		die('Cannot connect to ubus\n');
+
+	let res = conn.call('wrthotspot', method, args ?? {});
+
+	if (res == null)
+		die(`hotspotd not responding (${ubus.error()}) - is the service running?\n`);
+
+	return res;
+}
+
+function table(rows, cols) {
+	let w = map(cols, (c) => length(c));
+
+	for (let r in rows)
+		for (let i = 0; i < length(cols); i++)
+			w[i] = max(w[i], length(`${r[i] ?? ''}`));
+
+	function line(cells) {
+		let out = '';
+		for (let i = 0; i < length(cols); i++)
+			out += sprintf(`%-${w[i] + 2}s`, `${cells[i] ?? ''}`);
+		print(rtrim(out), '\n');
+	}
+
+	line(cols);
+	for (let r in rows)
+		line(r);
+}
+
+function kv_args(list) {
+	let out = {};
+
+	for (let a in list) {
+		let i = index(a, '=');
+		if (i <= 0)
+			die(`Expected key=value, got "${a}"\n`);
+
+		let k = substr(a, 0, i), v = substr(a, i + 1);
+		out[k] = (k == 'disabled') ? (v == '1' || v == 'yes' || v == 'true') : v;
+	}
+
+	return out;
+}
+
+function ok(res) {
+	if (res.ok === false)
+		die(`Error: ${res.error}\n`);
+	return res;
+}
+
+function setup(net) {
+	let c = cursor();
+	c.load('network');
+	c.load('firewall');
+	c.load('wrthotspot');
+
+	if (!net || c.get('network', net) != 'interface')
+		die(`No network interface "${net}" in /etc/config/network\n`);
+
+	let port = c.get('wrthotspot', 'global', 'portal_port') ?? '8002';
+	let zone = null;
+
+	c.foreach('firewall', 'zone', (z) => {
+		let nets = z.network;
+		nets = (type(nets) == 'array') ? nets : split(nets ?? '', ' ');
+		if (net in nets)
+			zone = z.name;
+	});
+
+	if (zone && zone != net) {
+		warn(`Note: ${net} is already in firewall zone "${zone}"; leaving that zone as is.\n`);
+	}
+	else if (!zone) {
+		zone = net;
+		let z = c.add('firewall', 'zone');
+		c.set('firewall', z, 'name', zone);
+		c.set('firewall', z, 'network', [ net ]);
+		c.set('firewall', z, 'input', 'REJECT');
+		c.set('firewall', z, 'output', 'ACCEPT');
+		c.set('firewall', z, 'forward', 'REJECT');
+
+		let f = c.add('firewall', 'forwarding');
+		c.set('firewall', f, 'src', zone);
+		c.set('firewall', f, 'dest', 'wan');
+		print(`Created firewall zone "${zone}" with forwarding to wan\n`);
+	}
+
+	let rules = [
+		{ name: 'DHCP', proto: 'udp', dest_port: '67-68', family: 'ipv4' },
+		{ name: 'DHCPv6', proto: 'udp', dest_port: '547', family: 'ipv6' },
+		{ name: 'ICMPv6', proto: 'icmp', family: 'ipv6',
+		  icmp_type: [ 'echo-request', 'router-solicitation', 'neighbour-solicitation', 'neighbour-advertisement' ] },
+		{ name: 'DNS', proto: [ 'tcp', 'udp' ], dest_port: '53' },
+		{ name: 'Portal', proto: 'tcp', dest_port: `${port} ${int(port) + 1}` },
+	];
+
+	for (let r in rules) {
+		let name = `Allow-${zone}-${r.name}`;
+		let exists = false;
+
+		c.foreach('firewall', 'rule', (s) => { if (s.name == name) exists = true; });
+		if (exists)
+			continue;
+
+		let s = c.add('firewall', 'rule');
+		c.set('firewall', s, 'name', name);
+		c.set('firewall', s, 'src', zone);
+		c.set('firewall', s, 'target', 'ACCEPT');
+
+		for (let k, v in r)
+			if (k != 'name')
+				c.set('firewall', s, k, v);
+	}
+
+	// Offloaded flows bypass nftables: accounting, limits and logout would break.
+	let d = null;
+	c.foreach('firewall', 'defaults', (s) => { d ??= s['.name']; });
+	if (d) {
+		if (c.get('firewall', d, 'flow_offloading') == '1' || c.get('firewall', d, 'flow_offloading_hw') == '1')
+			print('Disabled software/hardware flow offloading (incompatible with hotspot accounting)\n');
+
+		c.set('firewall', d, 'flow_offloading', '0');
+		c.set('firewall', d, 'flow_offloading_hw', '0');
+	}
+
+	if (c.get('wrthotspot', net) != 'server') {
+		c.set('wrthotspot', net, 'server');
+		c.set('wrthotspot', net, 'interface', net);
+		c.set('wrthotspot', net, 'profile', 'default');
+		c.set('wrthotspot', net, 'idle_timeout', '5m');
+		print(`Created hotspot server "${net}"\n`);
+	}
+
+	c.save('firewall');
+	c.save('wrthotspot');
+	c.commit('firewall');
+	c.commit('wrthotspot');
+
+	print('Done. Apply with:\n  service firewall reload && service wrthotspot restart\n');
+}
+
+function check() {
+	let c = cursor();
+	let problems = 0;
+
+	function report(good, msg) {
+		print(good ? '  ok    ' : '  FAIL  ', msg, '\n');
+		if (!good)
+			problems++;
+	}
+
+	c.load('firewall');
+	let off = false;
+	c.foreach('firewall', 'defaults', (s) => { off ||= (s.flow_offloading == '1' || s.flow_offloading_hw == '1'); });
+	report(!off, 'flow offloading disabled');
+
+	let nft = run('nft --version');
+	report(nft.code == 0, `nftables: ${trim(nft.out)}`);
+
+	let t = run('nft -c -f - <<EOF\ntable inet wrthotspot_probe\ndestroy table inet wrthotspot_probe\nEOF');
+	report(t.code == 0, 'nft supports "destroy" (kernel >= 6.3, nft >= 1.0.8)');
+
+	let tbl = run('nft list table inet wrthotspot >/dev/null');
+	report(tbl.code == 0, 'dataplane table inet wrthotspot present');
+
+	let dm = run('dnsmasq -v');
+	report(index(dm.out, 'nftset') >= 0 && index(dm.out, 'no-nftset') < 0, 'dnsmasq with nftset support (dnsmasq-full) - needed for domain walled garden');
+
+	exit(problems ? 1 : 0);
+}
+
+let args = ARGV;
+let cmd = shift(args);
+
+switch (cmd) {
+case 'status':
+	let st = call('status');
+	print(`hotspotd ${st.version}: ${st.sessions} session(s), ${st.hosts} host(s), ${st.users} user(s)\n`);
+	for (let dev, srv in st.devices)
+		print(`  server ${srv} on ${dev}\n`);
+	break;
+
+case 'sessions':
+	table(map(call('sessions').sessions, (s) => [
+		s.user, s.mac, join(',', s.ipv4), length(s.ipv6) ? `${length(s.ipv6)} addr` : '-',
+		s.server, s.login_by, s.uptime_text, fmt_bytes(s.bytes_in), fmt_bytes(s.bytes_out), s.id,
+	]), [ 'USER', 'MAC', 'IPV4', 'IPV6', 'SERVER', 'BY', 'UPTIME', 'IN', 'OUT', 'ID' ]);
+	break;
+
+case 'hosts':
+	table(map(call('hosts').hosts, (h) => [
+		h.mac, h.authorized ? 'A' : '-', h.server, h.dev, join(',', h.ipv4), join(' ', h.ipv6),
+	]), [ 'MAC', 'AUTH', 'SERVER', 'DEV', 'IPV4', 'IPV6' ]);
+	break;
+
+case 'users':
+	table(map(call('user_list').users, (u) => [
+		u.name, u.profile, u.server, u.mac || '-', u.disabled ? 'X' : '',
+		fmt_duration(u.used?.uptime), fmt_bytes(u.used?.bytes_in), fmt_bytes(u.used?.bytes_out), u.comment,
+	]), [ 'NAME', 'PROFILE', 'SERVER', 'MAC', 'DIS', 'UPTIME', 'IN', 'OUT', 'COMMENT' ]);
+	break;
+
+case 'user':
+	let sub = shift(args), name = shift(args);
+
+	if (!name)
+		die(USAGE);
+
+	if (sub == 'add' || sub == 'set')
+		ok(call('user_set', { name, ...kv_args(args) }));
+	else if (sub == 'del' || sub == 'remove')
+		ok(call('user_remove', { name }));
+	else if (sub == 'reset')
+		ok(call('user_reset_counters', { name }));
+	else
+		die(USAGE);
+	break;
+
+case 'logout':
+	let sel = shift(args);
+
+	if (!sel)
+		die(USAGE);
+
+	let a = match(sel, /^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$/) ? { mac: sel }
+		: match(sel, /^[0-9.]+$|:/) ? { ip: sel }
+		: match(sel, /^[0-9a-f]{8}$/) ? { id: sel }
+		: { user: sel };
+
+	print(`Logged out ${ok(call('logout', { ...a, cause: 'admin-reset' })).count} session(s)\n`);
+	break;
+
+case 'setup':
+	setup(shift(args));
+	break;
+
+case 'check':
+	check();
+	break;
+
+case 'flush':
+	ok(call('flush'));
+	print('All sessions logged out, dataplane removed\n');
+	break;
+
+default:
+	print(USAGE);
+	exit(cmd ? 1 : 0);
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$(identity) - Login</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/md5.js"></script>
+<script>
+function doLogin() {
+	var f = document.sendin, p = document.login.password.value;
+	f.username.value = document.login.username.value;
+	f.password.value = '$(chap-id)' ? hexMD5('$(chap-id)' + utf8Bytes(p) + '$(chap-challenge)') : p;
+	f.submit();
+	return false;
+}
+</script>
+</head><body>
+<div class="card">
+	<h1>$(identity)</h1>
+	<p class="sub">Sign in to get online</p>
+	<form name="sendin" action="$(link-login-only)" method="post" style="display:none">
+		<input type="hidden" name="username"><input type="hidden" name="password">
+		<input type="hidden" name="dst" value="$(link-orig)"><input type="hidden" name="popup" value="false">
+	</form>
+	<form name="login" action="$(link-login-only)" method="post" $(if chap-id)onsubmit="return doLogin()"$(endif)>
+		<input type="hidden" name="dst" value="$(link-orig)">
+		<label for="u">Username</label>
+		<input id="u" type="text" name="username" value="$(username)" autocomplete="username" autocapitalize="off" autofocus>
+		<label for="p">Password</label>
+		<input id="p" type="password" name="password" autocomplete="current-password">
+		$(if error)<p class="err">$(error)</p>$(endif)
+		<button type="submit">Sign in</button>
+	</form>
+	$(if trial == yes)
+	<a class="btn secondary" href="$(link-login-only)?dst=$(link-orig-esc)&amp;trial=yes">Free trial</a>
+	$(endif)
+	<div class="foot">$(mac)</div>
+</div>
+</body></html>

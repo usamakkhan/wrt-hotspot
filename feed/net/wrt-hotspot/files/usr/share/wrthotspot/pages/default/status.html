@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+$(if refresh-timeout-secs)<meta http-equiv="refresh" content="$(refresh-timeout-secs)">$(endif)
+<title>$(identity) - Status</title>
+<link rel="stylesheet" href="/style.css">
+</head><body>
+<div class="card">
+	<h1>$(username)</h1>
+	<p class="sub">$(if login-by == trial)Free trial$(else)Connected$(endif)</p>
+	<table>
+		<tr><td>IP address</td><td>$(ip)</td></tr>
+		$(if ipv6)<tr><td>IPv6</td><td style="word-break:break-all">$(ipv6)</td></tr>$(endif)
+		<tr><td>Uptime</td><td>$(uptime)</td></tr>
+		$(if session-time-left)<tr><td>Time left</td><td>$(session-time-left)</td></tr>$(endif)
+		<tr><td>Uploaded</td><td>$(bytes-in-nice)</td></tr>
+		<tr><td>Downloaded</td><td>$(bytes-out-nice)</td></tr>
+	</table>
+	<form action="$(link-logout)" method="post"><button type="submit">Log out</button></form>
+</div>
+</body></html>

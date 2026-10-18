@@ -1,0 +1,35 @@
+config global 'global'
+	option enabled '1'
+	# Seconds between counter reads / timeout checks.
+	option poll_interval '10s'
+	option portal_port '8002'
+	option state_dir '/tmp/wrthotspot'
+	option db_dir '/etc/wrthotspot'
+	# How often user usage counters are written to flash.
+	option db_sync_interval '5m'
+	option log_level 'info'
+	option nas_identifier 'WrtHotspot'
+
+# One server per hotspot network (created by `wrthotspot setup <network>`).
+#config server 'hotspot'
+#	option interface 'hotspot'
+#	option profile 'default'
+#	option idle_timeout '5m'
+
+config server_profile
+	option name 'default'
+	option dns_name ''
+	list login_by 'http-chap'
+	list login_by 'http-pap'
+	option html_directory '/usr/share/wrthotspot/pages/default'
+	option trial_uptime_limit '30m'
+	option trial_uptime_reset '1d'
+	option trial_user_profile 'default'
+
+config user_profile
+	option name 'default'
+	option shared_users '1'
+	option session_timeout '0'
+	option idle_timeout '0'
+	option keepalive_timeout '2m'
+	option status_autorefresh '1m'
