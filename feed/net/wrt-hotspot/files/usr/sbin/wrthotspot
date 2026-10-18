@@ -5,6 +5,8 @@
 import * as ubus from 'ubus';
 import { cursor } from 'uci';
 import { fmt_duration, fmt_bytes, run } from 'wrthotspot.util';
+import { run_checks } from 'wrthotspot.diag';
+import { load as load_config } from 'wrthotspot.config';
 
 const USAGE = `Usage: wrthotspot <command> [args]
 
@@ -229,33 +231,21 @@ function make_cert(name) {
 }
 
 function check() {
-	let c = cursor();
-	let problems = 0;
+	conn ??= ubus.connect();
 
-	function report(good, msg) {
-		print(good ? '  ok    ' : '  FAIL  ', msg, '\n');
-		if (!good)
-			problems++;
+	let st = conn ? conn.call('wrthotspot', 'status') : null;
+	let checks = run_checks(load_config(), st ? { running: true, ...st } : { running: false });
+	let bad = 0;
+
+	for (let c in checks) {
+		print(sprintf('  %-6s %s
+', (c.level == 'ok') ? 'ok' : uc(c.level), c.message));
+
+		if (c.level == 'error')
+			bad++;
 	}
 
-	c.load('firewall');
-	let off = false;
-	c.foreach('firewall', 'defaults', (s) => { off ||= (s.flow_offloading == '1' || s.flow_offloading_hw == '1'); });
-	report(!off, 'flow offloading disabled');
-
-	let nft = run('nft --version');
-	report(nft.code == 0, `nftables: ${trim(nft.out)}`);
-
-	let t = run('nft -c -f - <<EOF\ntable inet wrthotspot_probe\ndestroy table inet wrthotspot_probe\nEOF');
-	report(t.code == 0, 'nft supports "destroy" (kernel >= 6.3, nft >= 1.0.8)');
-
-	let tbl = run('nft list table inet wrthotspot >/dev/null');
-	report(tbl.code == 0, 'dataplane table inet wrthotspot present');
-
-	let dm = run('dnsmasq -v');
-	report(index(dm.out, 'nftset') >= 0 && index(dm.out, 'no-nftset') < 0, 'dnsmasq with nftset support (dnsmasq-full) - needed for domain walled garden');
-
-	exit(problems ? 1 : 0);
+	exit(bad ? 1 : 0);
 }
 
 let args = ARGV;

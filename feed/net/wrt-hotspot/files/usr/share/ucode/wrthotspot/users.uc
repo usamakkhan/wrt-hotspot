@@ -51,7 +51,8 @@ export function create(db_dir) {
 			if (!dirty && !force)
 				return true;
 
-			if (!write_atomic(path, sprintf('%J', { version: 1, users }))) {
+			// Passwords are stored in clear (CHAP needs them): root-only file.
+			if (!write_atomic(path, sprintf('%J', { version: 1, users }), 0o600)) {
 				log('error', 'Cannot write %s: %s', path, fs.error());
 				return false;
 			}

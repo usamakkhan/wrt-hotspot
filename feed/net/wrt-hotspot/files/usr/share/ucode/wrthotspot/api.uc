@@ -2,8 +2,11 @@
 // captive portal, the CLI, the LuCI rpcd plugin and the operator panel.
 'use strict';
 
+import * as uloop from 'uloop';
 import { public_view } from 'wrthotspot.users';
 import { VERSION, CAUSE } from 'wrthotspot.core';
+import { run_checks } from 'wrthotspot.diag';
+import { run, shell_quote } from 'wrthotspot.util';
 
 const USER_ARGS = {
 	name: '', password: '', profile: '', server: '', mac: '',
@@ -16,7 +19,7 @@ export function publish(conn, core) {
 		return { ok: false, error: msg };
 	}
 
-	return conn.publish('wrthotspot', {
+	let methods = {
 		status: {
 			call: function() {
 				return {
@@ -25,7 +28,38 @@ export function publish(conn, core) {
 					sessions: length(core.sessions()),
 					hosts: length(core.hosts()),
 					users: core.users().count(),
+					...core.runtime(),
 				};
+			},
+		},
+
+		// Health checks for the diagnostics page.
+		check: {
+			call: function() {
+				return { checks: run_checks(core.config(), { running: true, devices: core.devices(), ...core.runtime() }) };
+			},
+		},
+
+		// Same as `wrthotspot setup <network>`, then apply it in the background
+		// (the reload of hotspotd itself must not run inside this call).
+		setup: {
+			args: { network: '' },
+			call: function(req) {
+				let net = req.args.network;
+
+				if (!match(net ?? '', /^[A-Za-z0-9_]+$/))
+					return err('invalid network name');
+
+				let r = run(`/usr/sbin/wrthotspot setup ${shell_quote(net)}`);
+
+				if (r.code != 0)
+					return err(trim(r.out));
+
+				uloop.process('/bin/sh', [ '-c',
+					'/etc/init.d/network reload; /etc/init.d/firewall reload; /etc/init.d/dnsmasq restart; ' +
+					'/etc/init.d/odhcpd restart; /etc/init.d/wrthotspot reload' ], {}, () => {});
+
+				return { ok: true, output: trim(r.out) };
 			},
 		},
 
@@ -153,5 +187,14 @@ export function publish(conn, core) {
 				return { ok: true };
 			},
 		},
-	});
+	};
+
+	// Calls forwarded by rpcd (LuCI, the operator panel) carry the caller's
+	// ubus_rpc_session; ucode rejects undeclared arguments, so accept it.
+	for (let name, m in methods) {
+		m.args ??= {};
+		m.args.ubus_rpc_session = '';
+	}
+
+	return conn.publish('wrthotspot', methods);
 };

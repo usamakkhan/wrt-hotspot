@@ -1,0 +1,74 @@
+{
+	"admin/services/wrthotspot": {
+		"title": "Hotspot",
+		"order": 45,
+		"action": {
+			"type": "alias",
+			"path": "admin/services/wrthotspot/status"
+		},
+		"depends": {
+			"acl": [ "luci-app-wrt-hotspot" ],
+			"uci": { "wrthotspot": true }
+		}
+	},
+
+	"admin/services/wrthotspot/status": {
+		"title": "Status",
+		"order": 10,
+		"action": { "type": "view", "path": "wrthotspot/status" }
+	},
+
+	"admin/services/wrthotspot/users": {
+		"title": "Users",
+		"order": 20,
+		"action": { "type": "view", "path": "wrthotspot/users" }
+	},
+
+	"admin/services/wrthotspot/servers": {
+		"title": "Servers",
+		"order": 30,
+		"action": { "type": "view", "path": "wrthotspot/servers" }
+	},
+
+	"admin/services/wrthotspot/profiles": {
+		"title": "User Profiles",
+		"order": 40,
+		"action": { "type": "view", "path": "wrthotspot/profiles" }
+	},
+
+	"admin/services/wrthotspot/limitations": {
+		"title": "Limitations",
+		"order": 50,
+		"action": { "type": "view", "path": "wrthotspot/limitations" }
+	},
+
+	"admin/services/wrthotspot/walledgarden": {
+		"title": "Walled Garden",
+		"order": 60,
+		"action": { "type": "view", "path": "wrthotspot/walledgarden" }
+	},
+
+	"admin/services/wrthotspot/bindings": {
+		"title": "IP Bindings",
+		"order": 70,
+		"action": { "type": "view", "path": "wrthotspot/bindings" }
+	},
+
+	"admin/services/wrthotspot/radius": {
+		"title": "RADIUS",
+		"order": 80,
+		"action": { "type": "view", "path": "wrthotspot/radius" }
+	},
+
+	"admin/services/wrthotspot/settings": {
+		"title": "Settings",
+		"order": 90,
+		"action": { "type": "view", "path": "wrthotspot/settings" }
+	},
+
+	"admin/services/wrthotspot/diagnostics": {
+		"title": "Diagnostics",
+		"order": 100,
+		"action": { "type": "view", "path": "wrthotspot/diagnostics" }
+	}
+}

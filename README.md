@@ -3,7 +3,7 @@
 A MikroTik-Hotspot-class captive portal for OpenWrt 24.10+, with full IPv6 support, RADIUS (incl. CoA),
 vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 
-Status: **Phases 1–4 working**, tested end to end on OpenWrt 25.12.5 x86-64 against FreeRADIUS 3.2.10,
+Status: **Phases 1–5 working**, tested end to end on OpenWrt 25.12.5 x86-64 against FreeRADIUS 3.2.10,
 with rates measured by iperf3 (137/137 checks).
 
 - [docs/research.md](docs/research.md) — stack, prior art, dataplane and MikroTik feature research
@@ -47,6 +47,15 @@ with rates measured by iperf3 (137/137 checks).
   every window are refused and sessions end when the window closes.
 - `wrthotspot` CLI: `setup <network>` wizard (zone, rules, DHCP/RA, offload off, server), `cert`, `cookies`, …
 
+## LuCI app
+
+`luci-app-wrt-hotspot` adds **Services → Hotspot** with ten pages: Status (live sessions with logout,
+hosts with their IPv4/IPv6 addresses, cookies), Users (add/edit/reset/delete local users), Servers and
+server profiles, User Profiles, Limitations, Walled Garden, IP Bindings, RADIUS, Settings, and
+Diagnostics (health checks with one-click fixes, hotspot network setup, log everybody out).
+Configuration changes apply through LuCI's normal Save & Apply; hotspotd reloads in place without
+dropping sessions.
+
 Optional packages: `wrt-hotspot-shaper` (tc HTB shaping), `dnsmasq-full` (walled-garden subdomains),
 `libustream-mbedtls` (HTTPS login).
 
@@ -63,9 +72,10 @@ change addresses (SLAAC, privacy extensions). Bind IPv6 devices by MAC.
 
 ```
 feed/net/wrt-hotspot/           OpenWrt package (add feed/ as a src-link feed)
+feed/luci/luci-app-wrt-hotspot/ LuCI app (views in htdocs/, menu + ACL in root/)
   files/usr/sbin/hotspotd       daemon (ucode, uloop, ubus object "wrthotspot")
   files/usr/sbin/wrthotspot     CLI
-  files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, dns, radius, shaper, limits, template, util
+  files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, dns, radius, shaper, limits, diag, template, util
   files/usr/share/wrthotspot/   portal.uc (uhttpd handler) and default pages
 tests/unit/                     ucode unit tests        (sh tests/run-unit.sh)
 tests/integration/              end-to-end netns test   (sh tests/integration/netns-test.sh)

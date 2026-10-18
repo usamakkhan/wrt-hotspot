@@ -1,0 +1,17 @@
+{
+	"luci-app-wrt-hotspot": {
+		"description": "Grant access to the WrtHotspot captive portal",
+		"read": {
+			"ubus": {
+				"wrthotspot": [ "status", "sessions", "hosts", "cookies", "user_list", "user_get", "check" ]
+			},
+			"uci": [ "wrthotspot", "network", "firewall", "dhcp" ]
+		},
+		"write": {
+			"ubus": {
+				"wrthotspot": [ "logout", "user_set", "user_remove", "user_reset_counters", "cookie_remove", "reload", "flush", "setup" ]
+			},
+			"uci": [ "wrthotspot" ]
+		}
+	}
+}

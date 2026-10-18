@@ -26,6 +26,10 @@ export function parse_clock(v) {
 export function parse_days(v) {
 	let out = {};
 
+	// LuCI stores the days as a UCI list.
+	if (type(v) == 'array')
+		v = join(' ', v);
+
 	for (let tok in split(lc(`${v ?? ''}`), /[ ,]+/)) {
 		if (tok == '')
 			continue;

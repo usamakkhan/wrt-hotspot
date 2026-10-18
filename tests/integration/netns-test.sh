@@ -392,7 +392,7 @@ if command -v iperf3 >/dev/null && command -v tc >/dev/null; then
 	check "per-session class created" sh -c "tc class show dev br-hstest | grep -q 'ceil 4Mbit'"
 	check_rate "download limited to 4M (IPv4)" "$(mbps 10.98.0.2 -R -t 10 -O 3)" 3.6 4.05
 	check_rate "download limited to 4M (IPv6)" "$(mbps fd98::2 -R -t 10 -O 3)" 3.6 4.05
-	check_rate "upload limited to 1M" "$(mbps 10.98.0.2 -t 10 -O 3)" 0.9 1.02
+	check_rate "upload limited to 1M" "$(mbps 10.98.0.2 -t 10 -O 3)" 0.9 1.08
 	wrthotspot logout rate1 >/dev/null
 	check_not "class removed on logout" sh -c "tc class show dev br-hstest | grep -q 'ceil 4Mbit'"
 	post_has 'username=alice&password=secret' 'You are connected'

@@ -195,7 +195,7 @@ export function create(opts) {
 			if (c.expires < now)
 				delete mac_cookies[m];
 
-		write_atomic(cookies_path(), sprintf('%J', { version: 1, cookies, mac_cookies }));
+		write_atomic(cookies_path(), sprintf('%J', { version: 1, cookies, mac_cookies }), 0o600);
 		cookies_dirty = false;
 	}
 
@@ -322,6 +322,13 @@ export function create(opts) {
 	};
 
 	self.devices = () => devices;
+
+	// Runtime facts for status and diagnostics.
+	self.runtime = () => ({
+		shaper: (shp == null) ? 'off' : (shp == 'nft') ? 'nft' : 'tc',
+		radius_backlog: rad.backlog(),
+		coa_listening: !!coa,
+	});
 	self.config = () => cfg;
 
 	/* ---------- kernel state ---------- */

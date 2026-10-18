@@ -146,7 +146,7 @@ Users (add, reset, extend, disconnect) · Sessions history · Reports. Mobile-fr
 | 2 ✓ | Portal pages + template engine, OS probes, RFC 8908/8910, walled garden, IP bindings, trial, cookies |
 | 3 ✓ | RADIUS auth/accounting/CoA/DM + VSAs |
 | 4 ✓ | Shaping (nft limits, then HTB), quotas, scheduled limitations |
-| 5 | LuCI app |
+| 5 ✓ | LuCI app |
 | 6 | Operator panel, vouchers, printing, reports |
 | 7 | Hardware qualification: MIPS 24Kc, MT7621, IPQ40xx, x86; 2000-client load test |
 

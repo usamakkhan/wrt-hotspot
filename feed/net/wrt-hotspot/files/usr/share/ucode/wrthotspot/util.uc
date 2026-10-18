@@ -137,11 +137,15 @@ export function random_hex(n) {
 };
 
 // Write a file atomically (tmp + rename) so a power cut never leaves half a DB.
-export function write_atomic(path, data) {
+export function write_atomic(path, data, mode) {
 	let tmp = `${path}.tmp`;
 
 	if (!fs.writefile(tmp, data))
 		return false;
+
+	// Set before the rename, so the file is never briefly readable.
+	if (mode != null)
+		fs.chmod(tmp, mode);
 
 	return fs.rename(tmp, path);
 };

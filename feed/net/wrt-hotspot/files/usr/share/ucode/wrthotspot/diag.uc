@@ -1,0 +1,139 @@
+// Health checks shared by `wrthotspot check` and the LuCI diagnostics page.
+// Each check: { id, level: 'ok' | 'warn' | 'error' | 'info', message, fix? }
+// `fix` names an action the GUI can offer (e.g. 'setup:<network>').
+'use strict';
+
+import * as fs from 'fs';
+import { cursor } from 'uci';
+import { run } from 'wrthotspot.util';
+import { dnsmasq_has_nftset } from 'wrthotspot.dns';
+import { tc_available } from 'wrthotspot.shaper';
+
+function listening(port) {
+	let out = run('netstat -ltn 2>/dev/null').out ?? '';
+	return !!match(out, regexp(`:${port}[[:space:]]`));
+}
+
+function udp_listening(port) {
+	let out = run('netstat -lun 2>/dev/null').out ?? '';
+	return !!match(out, regexp(`:${port}[[:space:]]`));
+}
+
+// cfg: loaded config; state: { running, devices, shaper, radius_backlog } from hotspotd (optional)
+export function run_checks(cfg, state) {
+	let out = [];
+	let add = (id, level, message, fix) => push(out, { id, level, message, fix });
+	let c = cursor();
+
+	c.load('firewall');
+	c.load('network');
+	c.load('dhcp');
+
+	add('daemon', state?.running ? 'ok' : 'error', state?.running ? 'hotspotd is running' : 'hotspotd is not running');
+
+	let off = false;
+	c.foreach('firewall', 'defaults', (s) => { off ||= (s.flow_offloading == '1' || s.flow_offloading_hw == '1'); });
+	add('offload', off ? 'error' : 'ok',
+		off ? 'Flow offloading is on: offloaded traffic bypasses accounting, limits and logout' : 'Flow offloading is off',
+		off ? 'disable_offload' : null);
+
+	let nftv = trim(run('nft --version').out ?? '');
+	let destroy = run('printf "table inet wrthotspot_probe\\ndestroy table inet wrthotspot_probe\\n" | nft -c -f -').code == 0;
+	add('nft', destroy ? 'ok' : 'error', destroy ? nftv : `${nftv}: no "destroy" support (needs kernel >= 6.3, nft >= 1.0.8)`);
+
+	let tbl = run('nft list chain inet wrthotspot forward >/dev/null').code == 0;
+	add('table', tbl ? 'ok' : 'error', tbl ? 'Dataplane table inet wrthotspot is loaded' : 'Dataplane table inet wrthotspot is missing');
+
+	if (!length(keys(cfg.servers)))
+		add('servers', 'warn', 'No hotspot server configured yet (Servers tab or `wrthotspot setup <network>`)');
+
+	for (let name, srv in cfg.servers) {
+		let dev = null;
+
+		for (let d, s in state?.devices ?? {})
+			if (s == name)
+				dev = d;
+
+		add(`server:${name}`, dev ? 'ok' : 'error',
+			dev ? `Server ${name}: active on ${dev}` : `Server ${name}: interface ${srv.interface ?? srv.device} has no device (down or missing)`);
+
+		if (!srv.interface)
+			continue;
+
+		let zone = null, fwd = false, portal_rule = false, dhcp = false;
+
+		c.foreach('firewall', 'zone', (z) => {
+			let nets = (type(z.network) == 'array') ? z.network : split(z.network ?? '', ' ');
+			if (srv.interface in nets)
+				zone = z.name;
+		});
+		c.foreach('firewall', 'forwarding', (f) => { if (zone && f.src == zone && f.dest == 'wan') fwd = true; });
+		c.foreach('firewall', 'rule', (r) => {
+			if (r.src == zone && index(`${r.dest_port ?? ''}`, `${cfg.global.portal_port}`) >= 0)
+				portal_rule = true;
+		});
+		c.foreach('dhcp', 'dhcp', (d) => { if (d.interface == srv.interface && d.ignore != '1') dhcp = true; });
+
+		let ok = zone && fwd && portal_rule;
+		add(`firewall:${name}`, ok ? 'ok' : 'error',
+			ok ? `Server ${name}: firewall zone ${zone} with portal rule and forwarding to wan`
+			   : `Server ${name}: firewall incomplete (zone: ${zone ?? 'none'}, wan forwarding: ${fwd ? 'yes' : 'no'}, portal rule: ${portal_rule ? 'yes' : 'no'})`,
+			ok ? null : `setup:${srv.interface}`);
+
+		add(`dhcp:${name}`, dhcp ? 'ok' : 'warn',
+			dhcp ? `Server ${name}: DHCP is served on ${srv.interface}` : `Server ${name}: no DHCP on ${srv.interface}; clients need addresses`,
+			dhcp ? null : `setup:${srv.interface}`);
+	}
+
+	let portal = listening(cfg.global.portal_port);
+	add('portal', portal ? 'ok' : 'error', portal ? `Portal listening on port ${cfg.global.portal_port}` : `Nothing listens on portal port ${cfg.global.portal_port}`);
+
+	let hosts_wg = length(filter(cfg.walled_garden, (e) => e.host));
+	let nftset = dnsmasq_has_nftset();
+	add('dnsmasq', nftset ? 'ok' : (hosts_wg ? 'warn' : 'info'),
+		nftset ? 'dnsmasq supports nftset (walled-garden subdomains)'
+		       : 'dnsmasq without nftset: walled-garden hosts work, their subdomains need dnsmasq-full');
+
+	let g = cfg.global;
+	if (g.ssl_certificate) {
+		let files = fs.stat(g.ssl_certificate) && fs.stat(g.ssl_key);
+		let tls = fs.stat('/lib/libustream-ssl.so') || fs.stat('/usr/lib/libustream-ssl.so');
+		let https = listening(g.https_port);
+		add('https', (files && tls && https) ? 'ok' : 'error',
+			!files ? 'Certificate or key file missing' : !tls ? 'No TLS library for uhttpd (install libustream-mbedtls)'
+			: !https ? `HTTPS portal not listening on ${g.https_port}` : `HTTPS portal on port ${g.https_port}`);
+	}
+	else {
+		add('https', 'info', 'No certificate: HTTPS login and RFC 8908/8910 announcement are off');
+	}
+
+	let has_rates = false;
+	for (let n, up in cfg.user_profiles)
+		if (up.rate_limit)
+			has_rates = true;
+	for (let n, l in cfg.limitations)
+		if (l.rate_limit)
+			has_rates = true;
+
+	let tc = tc_available();
+	let backend = state?.shaper ?? 'unknown';
+	add('shaper', (backend == 'tc' || (!has_rates && backend != 'unknown')) ? 'ok' : (backend == 'nft' ? 'warn' : 'info'),
+		(backend == 'tc') ? 'Rate limits: tc HTB shaping'
+		: (backend == 'nft') ? `Rate limits: nftables policing${tc ? '' : ' (install wrt-hotspot-shaper for HTB shaping)'}`
+		: (backend == 'off') ? 'Rate limits are switched off' : 'Rate limiting not active');
+
+	if (length(cfg.radius)) {
+		let coa = cfg.global.coa_port ? udp_listening(cfg.global.coa_port) : false;
+		add('radius', 'ok', `${length(cfg.radius)} RADIUS server(s) configured`);
+		add('coa', !cfg.global.coa_port ? 'info' : (coa ? 'ok' : 'error'),
+			!cfg.global.coa_port ? 'CoA/Disconnect listener disabled' : coa ? `CoA/Disconnect listening on udp/${cfg.global.coa_port}` : `CoA port ${cfg.global.coa_port} not listening`);
+
+		if (state?.radius_backlog)
+			add('acct_backlog', 'warn', `${state.radius_backlog} accounting request(s) waiting for a RADIUS server`);
+	}
+
+	let tz = fs.readfile('/etc/TZ');
+	add('timezone', 'info', `Time zone ${trim(tz ?? 'UTC')} (used by scheduled limitations)`);
+
+	return out;
+};
