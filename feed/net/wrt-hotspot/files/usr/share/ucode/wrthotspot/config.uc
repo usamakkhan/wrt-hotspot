@@ -27,6 +27,31 @@ function server_profile(s) {
 		split_user_domain: to_bool(s.split_user_domain),
 		rfc8910: to_bool(s.rfc8910 ?? '1'),
 		use_radius: to_bool(s.use_radius),
+		radius_accounting: to_bool(s.radius_accounting ?? '1'),
+		// "received" = use Acct-Interim-Interval from the server, else a duration.
+		radius_interim_update: (s.radius_interim_update == null || s.radius_interim_update == 'received')
+			? 'received' : dur(s.radius_interim_update, '0'),
+		radius_mac_format: s.radius_mac_format ?? 'XX:XX:XX:XX:XX:XX',
+		nas_port_type: s.nas_port_type ?? 'wireless-802.11',
+		radius_location_id: s.radius_location_id ?? '',
+		radius_location_name: s.radius_location_name ?? '',
+	};
+}
+
+function radius_server(s) {
+	let t = match(`${s.timeout ?? '1100'}`, /^(\d+)(ms|s)?$/);
+
+	return {
+		name: s['.name'],
+		address: s.address,
+		secret: s.secret ?? '',
+		auth_port: int(s.auth_port ?? 1812),
+		acct_port: int(s.acct_port ?? 1813),
+		timeout: t ? ((t[2] == 's') ? int(t[1]) * 1000 : int(t[1])) : 1100,
+		retries: int(s.retries ?? 2),
+		// Responses must carry a Message-Authenticator (BlastRADIUS,
+		// CVE-2024-3596). Turn off only for servers that can't send one.
+		require_message_auth: to_bool(s.require_message_auth ?? '1'),
 	};
 }
 
@@ -182,8 +207,11 @@ export function load(confdir) {
 			ssl_key: g.ssl_key ?? '',
 			resolve_interval: dur(g.resolve_interval, '5m') || 300,
 			walled_garden_ttl: dur(g.walled_garden_ttl, '1h') || 3600,
+			// RFC 5176 CoA / Disconnect-Request listener; 0 disables it.
+			coa_port: int(g.coa_port ?? 3799),
 		},
 		servers: {},
+		radius: [],
 		walled_garden: [],
 		ip_bindings: [],
 		server_profiles: {},
@@ -204,6 +232,18 @@ export function load(confdir) {
 		}
 
 		cfg.servers[srv.name] = srv;
+	});
+
+	c.foreach('wrthotspot', 'radius', (s) => {
+		if (!to_bool(s.enabled ?? '1'))
+			return;
+
+		let r = radius_server(s);
+
+		if (!r.address || !iptoarr(r.address) || r.secret == '')
+			log('warn', 'RADIUS server %s ignored: needs an IP address and a secret', s['.name']);
+		else
+			push(cfg.radius, r);
 	});
 
 	let wg_idx = 0;

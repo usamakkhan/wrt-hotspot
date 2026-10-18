@@ -144,7 +144,7 @@ Users (add, reset, extend, disconnect) · Sessions history · Reports. Mobile-fr
 | 0 | Repo layout, OpenWrt feed Makefiles, CI building ipk (24.10) + apk (25.12), nft syntax checks on 24.10/25.12 |
 | 1 ✓ | Dataplane + hotspotd core: hosts, MAC identity, local users, PAP/CHAP login, timeouts, accounting, IPv4+IPv6 |
 | 2 ✓ | Portal pages + template engine, OS probes, RFC 8908/8910, walled garden, IP bindings, trial, cookies |
-| 3 | RADIUS auth/accounting/CoA/DM + VSAs |
+| 3 ✓ | RADIUS auth/accounting/CoA/DM + VSAs |
 | 4 | Shaping (nft limits, then HTB), quotas, scheduled limitations |
 | 5 | LuCI app |
 | 6 | Operator panel, vouchers, printing, reports |

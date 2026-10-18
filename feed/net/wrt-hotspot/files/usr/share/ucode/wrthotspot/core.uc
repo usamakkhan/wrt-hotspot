@@ -7,6 +7,7 @@ import * as uloop from 'uloop';
 import { md5 } from 'digest';
 import * as nft from 'wrthotspot.nft';
 import * as dns from 'wrthotspot.dns';
+import * as radius from 'wrthotspot.radius';
 import * as users_db from 'wrthotspot.users';
 import * as hosts_mod from 'wrthotspot.hosts';
 import { load as load_config } from 'wrthotspot.config';
@@ -65,7 +66,12 @@ export function create(opts) {
 	let users;
 	let hosts;
 	let need_rebuild = true;
+	let dev_info = {};		// dev -> { ip4 } (NAS-IP-Address)
+	let rad = radius.client();
+	let coa = null;
 	let try_mac_cookie;		// defined below, used by self.client
+	let auto_login;
+	let mac_tried = {};		// mac -> last automatic MAC login attempt
 
 	let self = {};
 
@@ -197,20 +203,22 @@ export function create(opts) {
 		cookies_dirty = true;
 	}
 
-	// After a credential login: remember the device, as configured.
-	function issue_cookies(mac, server, username, profile) {
+	// After a credential login: remember the device, as configured. For
+	// RADIUS users the authorization (`radius_auth`) is kept with the cookie
+	// and replayed on cookie logins, so no password needs to be stored.
+	function issue_cookies(mac, server, username, profile, radius_auth) {
 		let sp = server_profile_of(server);
 		let up = user_profile(profile);
 		let token = null;
 
 		if ('cookie' in sp.login_by) {
 			token = random_hex(16);
-			cookies[token] = { user: username, mac, server, expires: time() + sp.http_cookie_lifetime };
+			cookies[token] = { user: username, mac, server, radius: radius_auth, expires: time() + sp.http_cookie_lifetime };
 			cookies_dirty = true;
 		}
 
 		if ('mac-cookie' in sp.login_by && up.add_mac_cookie) {
-			mac_cookies[mac] = { user: username, server, expires: time() + up.mac_cookie_timeout };
+			mac_cookies[mac] = { user: username, server, radius: radius_auth, expires: time() + up.mac_cookie_timeout };
 			cookies_dirty = true;
 		}
 
@@ -222,15 +230,18 @@ export function create(opts) {
 	function resolve_devices() {
 		let devs = {};
 
+		dev_info = {};
+
 		for (let name, srv in cfg.servers) {
 			if (!srv.enabled)
 				continue;
 
 			let dev = srv.device;
+			let st = null;
 
-			if (!dev && srv.interface && conn) {
-				let st = conn.call(`network.interface.${srv.interface}`, 'status');
-				dev = st?.l3_device ?? st?.device;
+			if (srv.interface && conn) {
+				st = conn.call(`network.interface.${srv.interface}`, 'status');
+				dev ??= st?.l3_device ?? st?.device;
 			}
 
 			if (!dev) {
@@ -239,9 +250,39 @@ export function create(opts) {
 			}
 
 			devs[dev] = name;
+			dev_info[dev] = { ip4: st?.['ipv4-address']?.[0]?.address };
 		}
 
 		return devs;
+	}
+
+	/* ---------- RADIUS: servers, CoA listener ---------- */
+
+	function setup_radius() {
+		rad.set_servers(cfg.radius);
+
+		let want = (length(cfg.radius) && cfg.global.coa_port > 0) ? cfg.global.coa_port : 0;
+
+		if (coa && coa.port != want) {
+			coa.close();
+			coa = null;
+		}
+
+		if (want && !coa && !opts?.no_coa) {
+			let h = radius.coa_server(want, () => cfg.radius, (pkt, srv) => self.coa(pkt, srv));
+
+			if (h) {
+				coa = { ...h, port: want };
+				log('info', 'Listening for RADIUS CoA/Disconnect on port %d', want);
+			}
+		}
+
+		let worst = 0;
+		for (let r in cfg.radius)
+			worst += r.timeout * (r.retries + 1);
+
+		if (worst > 9000)
+			log('warn', 'RADIUS timeout x retries over all servers is %d ms; portal logins may time out', worst);
 	}
 
 	function apply_dns() {
@@ -264,6 +305,8 @@ export function create(opts) {
 
 		if (hosts)
 			hosts.set_devices(devices);
+
+		setup_radius();
 
 		// Bindings and walled garden may have changed: always rebuild.
 		let err = self.rebuild();
@@ -369,7 +412,7 @@ export function create(opts) {
 		if (!mac)
 			return null;
 
-		try_mac_cookie(mac);
+		auto_login(mac);
 
 		let h = hosts.get(mac);
 		let slot = by_mac[mac];
@@ -400,6 +443,9 @@ export function create(opts) {
 			bytes_in_nice: fmt_bytes(t.bytes_in), bytes_out_nice: fmt_bytes(t.bytes_out),
 			ipv4: h ? sort(keys(h.ip4)) : [], ipv6: h ? sort(keys(h.ip6)) : [],
 			limits: s.limits,
+			rate_limit: s.rate_limit ?? '',
+			auth: s.radius ? 'radius' : 'local',
+			accounting: !!s.acct,
 		};
 	};
 
@@ -451,7 +497,154 @@ export function create(opts) {
 		};
 	}
 
-	function start_session(mac, server, username, profile, login_by, extra_uptime, user) {
+	/* ---------- RADIUS authorization ---------- */
+
+	// Access-Accept / CoA attributes -> authorization object. Only attributes
+	// that are present get a key, so a CoA changes just what it carries.
+	// Class values are kept hex-encoded (they are binary and must be JSON-safe).
+	function parse_authz(pkt) {
+		let a = {};
+		let v;
+
+		if ((v = radius.attr(pkt, 'Session-Timeout')) != null) a.session_timeout = v;
+		if ((v = radius.attr(pkt, 'Idle-Timeout')) != null) a.idle_timeout = v;
+		if ((v = radius.attr(pkt, 'Acct-Interim-Interval')) != null) a.interim = (v > 0) ? max(v, 10) : 0;
+		if ((v = radius.attr(pkt, 'Port-Limit')) != null) a.port_limit = v;
+		if ((v = radius.attr(pkt, 'Reply-Message')) != null) a.reply_message = v;
+		if ((v = radius.attr(pkt, 'Filter-Id')) != null) a.filter_id = v;
+		if ((v = radius.attr(pkt, 'Mikrotik-Group')) != null) a.group = v;
+		if ((v = radius.attr(pkt, 'Mikrotik-Address-List')) != null) a.address_list = v;
+
+		let cls = radius.attr(pkt, 'Class', true);
+		if (length(cls))
+			a.class = map(cls, (c) => hexenc(c));
+
+		let lim = (name) => {
+			let o = radius.attr(pkt, `Mikrotik-${name}-Limit`), g = radius.attr(pkt, `Mikrotik-${name}-Limit-Gigawords`);
+			return (o != null || g != null) ? radius.join64(o, g) : null;
+		};
+
+		if ((v = lim('Recv')) != null) a.bytes_in = v;		// router receives = client upload
+		if ((v = lim('Xmit')) != null) a.bytes_out = v;
+		if ((v = lim('Total')) != null) a.bytes_total = v;
+
+		// Rate limit precedence as on MikroTik: Mikrotik-Rate-Limit, then WISPr.
+		if ((v = radius.attr(pkt, 'Mikrotik-Rate-Limit')) != null) {
+			a.rate_limit = v;
+		}
+		else {
+			let up = radius.attr(pkt, 'WISPr-Bandwidth-Max-Up'), down = radius.attr(pkt, 'WISPr-Bandwidth-Max-Down');
+			if (up != null || down != null)
+				a.rate_limit = `${up ?? 0}/${down ?? 0}`;
+		}
+
+		if ((v = radius.parse_iso8601(radius.attr(pkt, 'WISPr-Session-Terminate-Time'))) != null)
+			a.terminate_at = v;
+
+		if (radius.attr(pkt, 'WISPr-Session-Terminate-End-Of-Day') == 1) {
+			let lt = localtime();
+			let eod = time() + 86400 - (lt.hour * 3600 + lt.min * 60 + lt.sec);
+			a.terminate_at = (a.terminate_at && a.terminate_at < eod) ? a.terminate_at : eod;
+		}
+
+		return a;
+	}
+
+	// RADIUS values override the profile (as on MikroTik).
+	function apply_authz(limits, a, started) {
+		if (!a)
+			return limits;
+
+		if (a.session_timeout != null)
+			limits.max_uptime = a.session_timeout;
+
+		if (a.terminate_at) {
+			let until = max(1, a.terminate_at - started);
+			if (!limits.max_uptime || until < limits.max_uptime)
+				limits.max_uptime = until;
+		}
+
+		if (a.idle_timeout != null)
+			limits.idle_timeout = a.idle_timeout;
+
+		for (let k in [ 'bytes_in', 'bytes_out', 'bytes_total' ])
+			if (a[k] != null)
+				limits[k] = a[k];
+
+		return limits;
+	}
+
+	// NAS/client attributes shared by Access-Request and accounting.
+	function nas_attrs(server, h, id, slot) {
+		let sp = server_profile_of(server);
+		let ip4 = h ? sort(keys(h.ip4))[0] : null;
+		let a = [
+			[ 'NAS-Identifier', cfg.global.nas_identifier || 'WrtHotspot' ],
+			[ 'NAS-IP-Address', dev_info[h?.dev]?.ip4 ],
+			[ 'NAS-Port-Type', radius.NAS_PORT_TYPE[sp.nas_port_type] ?? 19 ],
+			[ 'NAS-Port-Id', h?.dev ],
+			[ 'Calling-Station-Id', radius.format_mac(h.mac, sp.radius_mac_format) ],
+			[ 'Called-Station-Id', server ],
+			[ 'Framed-IP-Address', ip4 ],
+			[ 'Acct-Session-Id', id ],
+			[ 'WISPr-Location-ID', sp.radius_location_id || null ],
+			[ 'WISPr-Location-Name', sp.radius_location_name || null ],
+		];
+
+		if (slot)
+			push(a, [ 'NAS-Port', slot ]);
+
+		for (let v6 in (h ? sort(keys(h.ip6)) : []))
+			if (substr(v6, 0, 4) != 'fe80')
+				push(a, [ 'Framed-IPv6-Address', v6 ]);
+
+		return a;
+	}
+
+	/* ---------- RADIUS accounting ---------- */
+
+	function acct_enabled(server) {
+		let sp = server_profile_of(server);
+		return sp.use_radius && sp.radius_accounting && rad.have_servers();
+	}
+
+	function acct_send(s, status, cause) {
+		if (!s.acct)
+			return;
+
+		let h = hosts.get(s.mac) ?? { mac: s.mac, dev: s.dev, ip4: {}, ip6: {} };
+		let t = totals(s);
+		let i = radius.split64(t.bytes_in), o = radius.split64(t.bytes_out);
+		let a = [
+			[ 'Acct-Status-Type', status ],
+			[ 'User-Name', s.user ],
+			...nas_attrs(s.server, h, s.id, s.slot),
+			[ 'Acct-Authentic', s.radius ? 1 : 2 ],		// RADIUS / Local
+			[ 'Event-Timestamp', time() ],
+		];
+
+		for (let c in s.radius?.class ?? [])
+			push(a, [ 'Class', hexdec(c) ]);
+
+		if (status != radius.ACCT_START)
+			push(a,
+				[ 'Acct-Session-Time', time() - s.started ],
+				[ 'Acct-Input-Octets', i[0] ], [ 'Acct-Input-Gigawords', i[1] ],
+				[ 'Acct-Output-Octets', o[0] ], [ 'Acct-Output-Gigawords', o[1] ],
+				[ 'Acct-Input-Packets', t.packets_in % 4294967296 ],
+				[ 'Acct-Output-Packets', t.packets_out % 4294967296 ]);
+
+		if (status == radius.ACCT_STOP)
+			push(a, [ 'Acct-Terminate-Cause', radius.TERMINATE_CAUSE[cause] ?? 10 ]);
+
+		rad.accounting(a, null);
+	}
+
+	/* ---------- sessions ---------- */
+
+	// authz: RADIUS authorization (null for local users); id: Acct-Session-Id
+	// already sent in the Access-Request.
+	function start_session(mac, server, username, profile, login_by, extra_uptime, user, authz, id) {
 		let old = by_mac[mac];
 		if (old)
 			self.logout(old, CAUSE.NEW_LOGIN);
@@ -461,15 +654,22 @@ export function create(opts) {
 			return [ null, 'no free session slots' ];
 
 		let h = hosts.get(mac);
+		let sp = server_profile_of(server);
 		let now = time();
+		let interim = (sp.radius_interim_update == 'received') ? (authz?.interim ?? 0) : sp.radius_interim_update;
 		let s = {
 			slot, mac, server, user: username, profile, login_by,
-			id: random_hex(4),
+			id: id ?? random_hex(4),
 			dev: h?.dev,
 			started: now, last_activity: now, last_seen: now,
 			base: { up_bytes: 0, up_packets: 0, down_bytes: 0, down_packets: 0 },
 			k: { up_bytes: 0, up_packets: 0, down_bytes: 0, down_packets: 0 },
-			limits: limits_for(profile, user, extra_uptime),
+			limits: apply_authz(limits_for(profile, user, extra_uptime), authz, now),
+			radius: authz,
+			rate_limit: authz?.rate_limit ?? user_profile(profile).rate_limit,
+			acct: acct_enabled(server),
+			interim,
+			next_interim: interim ? now + interim : 0,
 		};
 
 		let err = exec(nft.session_add_cmds(slot, mac));
@@ -480,9 +680,10 @@ export function create(opts) {
 		by_mac[mac] = slot;
 		checkpoint();
 
-		log('info', 'Login %s (%s) on %s by %s', username, mac, server, login_by);
+		log('info', 'Login %s (%s) on %s by %s%s', username, mac, server, login_by, authz ? ' (RADIUS)' : '');
 		event('login', { user: username, mac, server, session_id: s.id, login_by });
 		run_hook(user_profile(profile).on_login, hook_env(s));
+		acct_send(s, radius.ACCT_START);
 
 		return [ s, null ];
 	}
@@ -491,7 +692,37 @@ export function create(opts) {
 		return { ok: false, code, error };
 	}
 
-	// Account checks shared by every user-based login method.
+	// Last step of every user login: concurrent-session limit, session,
+	// cookies. `authz` is set for RADIUS users.
+	function finish_login(mac, server, username, profile, method, user, authz, id) {
+		let limit = (authz?.port_limit != null) ? authz.port_limit : user_profile(profile).shared_users;
+		let active = filter(values(sessions), (s) => s.user == username && s.mac != mac);
+
+		if (limit > 0 && length(active) >= limit)
+			return fail('shared-users', 'no more sessions are allowed for this user');
+
+		let res = start_session(mac, server, username, profile, method, 0, user, authz, id);
+
+		if (!res[0])
+			return fail('internal', res[1]);
+
+		let out = { ok: true, session: self.session_view(res[0]) };
+
+		if (authz?.reply_message)
+			out.message = authz.reply_message;
+
+		// Cookie logins don't mint new cookies; credential logins may.
+		if (method != 'cookie' && method != 'mac-cookie') {
+			let token = issue_cookies(mac, server, username, profile, authz);
+
+			if (token)
+				out.cookie = { token, max_age: server_profile_of(server).http_cookie_lifetime };
+		}
+
+		return out;
+	}
+
+	// Account checks for local users.
 	function authorize_user(mac, server, username, method) {
 		let user = users.get(username);
 
@@ -517,28 +748,20 @@ export function create(opts) {
 		    (user.limit_bytes_total && used.bytes_in + used.bytes_out >= user.limit_bytes_total))
 			return fail('traffic-limit', 'traffic limit reached');
 
-		let up = user_profile(user.profile);
-		let active = filter(values(sessions), (s) => s.user == username && s.mac != mac);
+		return finish_login(mac, server, username, user.profile, method, user, null);
+	}
 
-		if (up.shared_users > 0 && length(active) >= up.shared_users)
-			return fail('shared-users', 'no more sessions are allowed for this user');
+	function radius_profile(authz) {
+		return (authz?.group && cfg.user_profiles[authz.group]) ? authz.group : 'default';
+	}
 
-		let res = start_session(mac, server, username, user.profile, method, 0, user);
+	// Cookie / MAC-cookie: local users are re-checked, RADIUS users get their
+	// stored authorization replayed (with fresh accounting).
+	function cookie_login(mac, server, entry, method) {
+		if (users.get(entry.user) || !entry.radius)
+			return authorize_user(mac, server, entry.user, method);
 
-		if (!res[0])
-			return fail('internal', res[1]);
-
-		let out = { ok: true, session: self.session_view(res[0]) };
-
-		// Cookie logins don't mint new cookies; credential logins may.
-		if (method != 'cookie' && method != 'mac-cookie') {
-			let token = issue_cookies(mac, server, username, user.profile);
-
-			if (token)
-				out.cookie = { token, max_age: server_profile_of(server).http_cookie_lifetime };
-		}
-
-		return out;
+		return finish_login(mac, server, entry.user, radius_profile(entry.radius), method, null, entry.radius);
 	}
 
 	// MAC-cookie: log a returning device back in without any page.
@@ -555,7 +778,7 @@ export function create(opts) {
 			return null;
 		}
 
-		let res = authorize_user(mac, h.server, mc.user, 'mac-cookie');
+		let res = cookie_login(mac, h.server, mc, 'mac-cookie');
 
 		// Failed MAC-cookie logins remove the cookie (MikroTik does the same).
 		if (!res.ok) {
@@ -567,9 +790,84 @@ export function create(opts) {
 		return res;
 	};
 
+	// A device without a session showed up: MAC cookie first, then MAC
+	// authentication (login_by mac), at most once a minute per device so a
+	// rejected MAC can't flood the RADIUS server.
+	auto_login = function(mac) {
+		if (by_mac[mac])
+			return;
+
+		if (mac_cookies[mac]) {
+			try_mac_cookie(mac);
+
+			if (by_mac[mac])
+				return;
+		}
+
+		let h = hosts.get(mac);
+
+		if (!h?.server || !('mac' in server_profile_of(h.server).login_by))
+			return;
+
+		if (time() - (mac_tried[mac] ?? 0) < 60)
+			return;
+
+		mac_tried[mac] = time();
+
+		let report = (res) => {
+			if (res && !res.ok)
+				log('debug', 'MAC login of %s refused: %s', mac, res.error);
+		};
+
+		report(self.login({ mac, method: 'mac' }, report));
+	};
+
+	// Access-Request for a user we don't have locally. done(result) is
+	// called once the server answers (or all servers timed out).
+	function radius_login(mac, server, sp, username, password, chap_response, method, done) {
+		let h = hosts.get(mac);
+		let id = random_hex(4);
+		let attrs = [
+			[ 'User-Name', username ],
+			[ 'Service-Type', 1 ],		// Login-User
+			...nas_attrs(server, h, id),
+		];
+
+		if (method == 'http-chap') {
+			let c = chap[mac];
+
+			if (!c || c.expires < time() || !match(chap_response ?? '', /^[0-9a-fA-F]{32}$/))
+				return done(fail('invalid', 'invalid username or password'));
+
+			delete chap[mac];
+			push(attrs, [ 'CHAP-Password', c.id + hexdec(chap_response) ], [ 'CHAP-Challenge', c.challenge ]);
+		}
+		else {
+			push(attrs, [ 'User-Password', password ?? '' ]);
+		}
+
+		rad.authenticate(attrs, (pkt, err) => {
+			if (!pkt) {
+				log('warn', 'RADIUS login of %s (%s): %s', username, mac, err);
+				return done(fail('radius-timeout', 'authentication server is not responding, try again later'));
+			}
+
+			if (pkt.code == radius.CODE.ACCESS_ACCEPT) {
+				let authz = parse_authz(pkt);
+				return done(finish_login(mac, server, username, radius_profile(authz), method, null, authz, id));
+			}
+
+			if (pkt.code == radius.CODE.ACCESS_CHALLENGE)
+				return done(fail('invalid', 'challenge-response authentication is not supported'));
+
+			done(fail('invalid', radius.attr(pkt, 'Reply-Message') ?? 'invalid username or password'));
+		});
+	}
+
 	// req: { ip?, mac?, method, username?, password?, chap_response?, cookie? }
-	// Returns { ok, session?, cookie?, error?, code? }.
-	self.login = function(req) {
+	// Returns { ok, session?, cookie?, message?, error?, code? }, or null when
+	// the answer depends on a RADIUS server: then done(result) follows.
+	self.login = function(req, done) {
 		let mac = normalize_mac(req.mac) ?? (req.ip ? hosts.mac_of(req.ip) : null);
 
 		if (!mac)
@@ -616,7 +914,7 @@ export function create(opts) {
 				return fail('cookie', 'cookie expired or invalid');
 			}
 
-			let res = authorize_user(mac, server, c.user, 'cookie');
+			let res = cookie_login(mac, server, c, 'cookie');
 
 			if (!res.ok) {
 				delete cookies[req.cookie];
@@ -633,7 +931,7 @@ export function create(opts) {
 		let password = req.password;
 
 		if (method == 'mac') {
-			username = mac;
+			username = users.get(mac) ? mac : radius.format_mac(mac, sp.radius_mac_format);
 			password = sp.mac_auth_password;
 		}
 
@@ -645,10 +943,83 @@ export function create(opts) {
 
 		let user = users.get(username);
 
+		// Local users first; unknown users go to RADIUS when enabled.
+		if (!user && sp.use_radius && rad.have_servers()) {
+			let sync = true, result = null;
+
+			radius_login(mac, server, sp, username, password, req.chap_response, method, (res) => {
+				if (sync)
+					result = res;
+				else if (done)
+					done(res);
+			});
+
+			sync = false;
+			return result;
+		}
+
 		if (!user || !check_password(mac, user, password, (method == 'http-chap') ? req.chap_response : null))
 			return fail('invalid', 'invalid username or password');
 
 		return authorize_user(mac, server, username, method);
+	};
+
+	/* ---------- RFC 5176 CoA / Disconnect ---------- */
+
+	self.coa = function(pkt, srv) {
+		let is_disc = (pkt.code == radius.CODE.DISCONNECT_REQUEST);
+		let nak = is_disc ? radius.CODE.DISCONNECT_NAK : radius.CODE.COA_NAK;
+		let sid = radius.attr(pkt, 'Acct-Session-Id');
+		let user = radius.attr(pkt, 'User-Name');
+		let csid = radius.attr(pkt, 'Calling-Station-Id');
+		let fip = radius.attr(pkt, 'Framed-IP-Address');
+		let mac = csid ? normalize_mac(lc(replace(csid, /[^0-9A-Fa-f]/g, ''))) : null;
+		let fmac = fip ? hosts.mac_of(fip) : null;
+
+		if (!sid && !user && !mac && !fip)
+			return [ nak, [ [ 'Error-Cause', 402 ] ] ];		// Missing-Attribute
+
+		let matched = filter(values(sessions), (s) =>
+			(!sid || s.id == sid) && (!user || s.user == user) && (!mac || s.mac == mac) && (!fip || s.mac == fmac));
+
+		if (!length(matched)) {
+			log('info', 'RADIUS %s from %s: no matching session', is_disc ? 'Disconnect' : 'CoA', srv.address);
+			return [ nak, [ [ 'Error-Cause', 503 ] ] ];		// Session-Context-Not-Found
+		}
+
+		if (is_disc) {
+			log('info', 'RADIUS Disconnect from %s: %d session(s)', srv.address, length(matched));
+			self.logout_many(map(matched, (s) => [ s.slot, CAUSE.ADMIN ]));
+			return [ radius.CODE.DISCONNECT_ACK, [] ];
+		}
+
+		let a = parse_authz(pkt);
+
+		for (let s in matched) {
+			s.radius = { ...(s.radius ?? {}), ...a };
+
+			if (a.group && cfg.user_profiles[a.group]) {
+				let up = user_profile(a.group);
+				s.profile = a.group;
+				s.limits.idle_timeout = up.idle_timeout;
+				s.limits.keepalive_timeout = up.keepalive_timeout;
+				s.rate_limit = up.rate_limit;
+			}
+
+			apply_authz(s.limits, a, s.started);
+
+			if (a.rate_limit != null)
+				s.rate_limit = a.rate_limit;
+
+			if (a.interim) {
+				s.interim = a.interim;
+				s.next_interim = time() + a.interim;
+			}
+		}
+
+		log('info', 'RADIUS CoA from %s applied to %d session(s)', srv.address, length(matched));
+		checkpoint();
+		return [ radius.CODE.COA_ACK, [] ];
 	};
 
 	function finish(s, cause) {
@@ -666,6 +1037,8 @@ export function create(opts) {
 
 		if (!(cause in COOKIE_KEEP))
 			drop_cookies(s.mac);
+
+		acct_send(s, radius.ACCT_STOP, cause);
 
 		log('info', 'Logout %s (%s): %s, %s, in %d / out %d bytes', s.user, s.mac, cause, fmt_duration(uptime), t.bytes_in, t.bytes_out);
 		event('logout', { user: s.user, mac: s.mac, server: s.server, session_id: s.id, cause, uptime, ...t });
@@ -764,6 +1137,11 @@ export function create(opts) {
 				need_rebuild = true;
 			}
 
+			if (s.acct && s.interim && now >= s.next_interim) {
+				acct_send(s, radius.ACCT_INTERIM);
+				s.next_interim = now + s.interim;
+			}
+
 			let t = totals(s);
 			let l = s.limits;
 			let uptime = now - s.started;
@@ -848,13 +1226,14 @@ export function create(opts) {
 			},
 			// A device we have a MAC cookie for showed up again.
 			on_update: (h) => {
-				if (!by_mac[h.mac] && mac_cookies[h.mac])
-					try_mac_cookie(h.mac);
+				if (!by_mac[h.mac])
+					auto_login(h.mac);
 			},
 		});
 
 		devices = resolve_devices();
 		hosts.set_devices(devices);
+		setup_radius();
 		restore();
 
 		let err = self.rebuild();

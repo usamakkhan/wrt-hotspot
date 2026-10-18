@@ -3,7 +3,8 @@
 A MikroTik-Hotspot-class captive portal for OpenWrt 24.10+, with full IPv6 support, RADIUS (incl. CoA),
 vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 
-Status: **Phases 1–2 working**, tested end to end on OpenWrt 25.12.5 x86-64 (85/85 checks).
+Status: **Phases 1–3 working**, tested end to end on OpenWrt 25.12.5 x86-64 against FreeRADIUS 3.2.10
+(114/114 checks).
 
 - [docs/research.md](docs/research.md) — stack, prior art, dataplane and MikroTik feature research
 - [docs/architecture.md](docs/architecture.md) — architecture, phases and MikroTik parity matrix
@@ -28,6 +29,14 @@ Status: **Phases 1–2 working**, tested end to end on OpenWrt 25.12.5 x86-64 (8
 - Portal name (`dns_name`) answered by dnsmasq with the router's IPv4 *and* IPv6 address per interface.
 - MikroTik-compatible page templates (`$(var)`, `$(if)…$(elif)…$(else)…$(endif)`) and servlet pages.
 - Survives daemon restart, `fw4 reload`, and even deletion of its table (rebuilt within one poll).
+- RADIUS (RFC 2865/2866/2869/5176): PAP, CHAP and MAC authentication; Message-Authenticator on every
+  request and required in replies (BlastRADIUS hardening); server failover with retries; accounting
+  Start/Interim/Stop with gigawords, Class echo, IPv4 + IPv6 Framed addresses and terminate causes;
+  undeliverable accounting is queued and retried; CoA and Disconnect-Request listener (ACK/NAK,
+  Error-Cause). Applied attributes: Session-Timeout, Idle-Timeout, Acct-Interim-Interval, Port-Limit,
+  Reply-Message, Class, Mikrotik-Group, Mikrotik-Rate-Limit, Mikrotik-Recv/Xmit/Total-Limit (+gigawords),
+  WISPr-Bandwidth-Max-Up/Down, WISPr-Session-Terminate-Time / -End-Of-Day. Cookie logins of RADIUS
+  users replay the stored authorization instead of keeping passwords.
 - `wrthotspot` CLI: `setup <network>` wizard (zone, rules, DHCP/RA, offload off, server), `cert`, `cookies`, …
 
 Optional packages: `dnsmasq-full` (walled-garden subdomains), `libustream-mbedtls` (HTTPS login).
@@ -41,7 +50,7 @@ change addresses (SLAAC, privacy extensions). Bind IPv6 devices by MAC.
 feed/net/wrt-hotspot/           OpenWrt package (add feed/ as a src-link feed)
   files/usr/sbin/hotspotd       daemon (ucode, uloop, ubus object "wrthotspot")
   files/usr/sbin/wrthotspot     CLI
-  files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, template, util
+  files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, dns, radius, template, util
   files/usr/share/wrthotspot/   portal.uc (uhttpd handler) and default pages
 tests/unit/                     ucode unit tests        (sh tests/run-unit.sh)
 tests/integration/              end-to-end netns test   (sh tests/integration/netns-test.sh)

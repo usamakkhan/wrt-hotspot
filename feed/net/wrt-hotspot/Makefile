@@ -15,7 +15,8 @@ define Package/wrt-hotspot
   TITLE:=MikroTik-class captive portal hotspot with IPv6
   PKGARCH:=all
   DEPENDS:=+ucode +ucode-mod-fs +ucode-mod-uci +ucode-mod-ubus +ucode-mod-uloop \
-	+ucode-mod-rtnl +ucode-mod-digest +uhttpd +uhttpd-mod-ucode \
+	+ucode-mod-rtnl +ucode-mod-digest +ucode-mod-socket +ucode-mod-struct \
+	+uhttpd +uhttpd-mod-ucode \
 	+nftables-json +kmod-nft-nat +kmod-nft-fib +firewall4
 endef
 

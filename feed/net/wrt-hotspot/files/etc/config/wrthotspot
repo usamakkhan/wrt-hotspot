@@ -16,7 +16,22 @@ config global 'global'
 	option resolve_interval '5m'
 	option walled_garden_ttl '1h'
 	option log_level 'info'
+	# NAS-Identifier sent to RADIUS.
 	option nas_identifier 'WrtHotspot'
+	# RFC 5176 CoA / Disconnect listener (0 = off). For a RADIUS server
+	# outside the router, allow udp/3799 from it in the firewall.
+	option coa_port '3799'
+
+# RADIUS servers, tried in order. Used by server profiles with use_radius.
+#config radius 'main'
+#	option address '192.0.2.10'
+#	option secret 'change-me'
+#	option auth_port '1812'
+#	option acct_port '1813'
+#	option timeout '1100ms'
+#	option retries '2'
+#	# Require Message-Authenticator in replies (BlastRADIUS, CVE-2024-3596).
+#	option require_message_auth '1'
 
 # One server per hotspot network (created by `wrthotspot setup <network>`).
 #config server 'hotspot'
@@ -39,6 +54,16 @@ config server_profile
 	option trial_user_profile 'default'
 	# Announce the RFC 8908 API in DHCP/RA (needs dns_name + certificate).
 	option rfc8910 '1'
+	# RADIUS: local users are checked first, unknown users go to RADIUS.
+	option use_radius '0'
+	option radius_accounting '1'
+	# 'received' = Acct-Interim-Interval from the server, or a duration.
+	option radius_interim_update 'received'
+	option radius_mac_format 'XX:XX:XX:XX:XX:XX'
+	option nas_port_type 'wireless-802.11'
+	#option radius_location_id 'isocc=us,cc=1,ac=408,network=ACMEWISP_NewarkAirport'
+	#option radius_location_name 'Lobby'
+	#option mac_auth_password ''
 
 config user_profile
 	option name 'default'

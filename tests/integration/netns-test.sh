@@ -74,8 +74,12 @@ cleanup() {
 	for f in /tmp/dnsmasq*.d/hstest.conf; do rm -f "$f"; done
 	if [ -d $BK ]; then
 		for c in $CONFIGS; do cp $BK/$c /etc/config/$c; done
+		[ -f $BK/fr-dictionary ] && cp $BK/fr-dictionary /etc/freeradius3/dictionary
+		[ -f $BK/fr-authorize ] && cp $BK/fr-authorize /etc/freeradius3/mods-config/files/authorize
 		rm -rf $BK
 	fi
+	[ -x /etc/init.d/radiusd ] && /etc/init.d/radiusd stop 2>/dev/null
+	rm -f /tmp/hsinet-www/big.bin
 
 	# Belt and braces: nothing of the test topology may survive into the next
 	# run's backup (sections referencing hstest/hsinet, by name or by value).
@@ -101,6 +105,11 @@ teardown() {
 }
 
 setup() {
+	# Start from a clean daemon state: no sessions, users or cookies of an
+	# earlier (kept) run may leak into this one.
+	ubus call wrthotspot flush >/dev/null 2>&1
+	/etc/init.d/wrthotspot stop
+	rm -f /etc/wrthotspot/users.json /etc/wrthotspot/cookies.json /tmp/wrthotspot/sessions.json
 	cleanup
 	mkdir -p $BK
 	for c in $CONFIGS; do cp /etc/config/$c $BK/$c; done
@@ -356,6 +365,145 @@ check "device back: logged in by MAC cookie, no page" online4
 check "session shows mac-cookie login" sh -c "wrthotspot sessions | grep carol | grep -q mac-cookie"
 wrthotspot logout carol >/dev/null
 check_not "admin logout drops the MAC cookie" sh -c "wrthotspot cookies | grep mac | grep -q carol"
+
+echo "== RADIUS (FreeRADIUS on the router)"
+if command -v radiusd >/dev/null; then
+	RD=/etc/freeradius3
+	ACCT=/var/db/radacct/127.0.0.1
+	cp $RD/dictionary $BK/fr-dictionary
+	cp $RD/mods-config/files/authorize $BK/fr-authorize
+	cat >> $RD/dictionary <<'EOF'
+VENDOR		Mikrotik			14988
+BEGIN-VENDOR	Mikrotik
+ATTRIBUTE	Mikrotik-Recv-Limit		1	integer
+ATTRIBUTE	Mikrotik-Xmit-Limit		2	integer
+ATTRIBUTE	Mikrotik-Group			3	string
+ATTRIBUTE	Mikrotik-Rate-Limit		8	string
+ATTRIBUTE	Mikrotik-Recv-Limit-Gigawords	14	integer
+ATTRIBUTE	Mikrotik-Xmit-Limit-Gigawords	15	integer
+ATTRIBUTE	Mikrotik-Total-Limit		17	integer
+ATTRIBUTE	Mikrotik-Total-Limit-Gigawords	18	integer
+ATTRIBUTE	Mikrotik-Address-List		19	string
+END-VENDOR	Mikrotik
+EOF
+	soon=$(date -u -d @$(( $(date +%s) + 25 )) +%Y-%m-%dT%H:%M:%SZ)
+	{ cat <<EOF
+radalice Cleartext-Password := "radpw"
+	Reply-Message = "Welcome radalice",
+	Session-Timeout = 3600,
+	Acct-Interim-Interval = 10,
+	Class = "gold-plan",
+	Mikrotik-Rate-Limit = "2M/4M"
+radshort Cleartext-Password := "x"
+	Session-Timeout = 5
+radquota Cleartext-Password := "x"
+	Mikrotik-Xmit-Limit = 30000
+radgroup Cleartext-Password := "x"
+	Mikrotik-Group = "idleprof"
+radwispr Cleartext-Password := "x"
+	WISPr-Session-Terminate-Time = "$soon"
+radbad Auth-Type := Reject
+	Reply-Message = "Account suspended"
+"02:00:00:00:99:10" Cleartext-Password := "macsecret"
+	Session-Timeout = 600
+EOF
+	cat $BK/fr-authorize; } > $RD/mods-config/files/authorize
+	rm -rf /var/db/radacct
+	dd if=/dev/zero of=/tmp/hsinet-www/big.bin bs=1k count=200 2>/dev/null
+	/etc/init.d/radiusd restart
+	sleep 3
+
+	uci set wrthotspot.rad=radius
+	uci set wrthotspot.rad.address=127.0.0.1
+	uci set wrthotspot.rad.secret=testing123
+	uci set wrthotspot.@server_profile[0].use_radius=1
+	uci commit wrthotspot
+	reload_hs
+	wrthotspot logout 02:00:00:00:99:10 >/dev/null 2>&1
+	sid() { ubus call wrthotspot sessions | jsonfilter -e "@.sessions[@.user='$1'].id"; }
+	sess() { ubus call wrthotspot sessions | jsonfilter -e "@.sessions[@.user='$1'].$2"; }
+	detail() { cat $ACCT/detail-* 2>/dev/null; }
+
+	check "CoA listener on 3799" sh -c "netstat -lnu | grep -q ':3799 '"
+	check "RADIUS PAP login" post_has 'username=radalice&password=radpw' 'You are connected'
+	check "online via RADIUS user" online4
+	check "session marked radius, rate limit from Mikrotik-Rate-Limit" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radalice'].rate_limit\")\" = 2M/4M ]"
+	check "Session-Timeout applied" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radalice'].limits.max_uptime\")\" = 3600 ]"
+	sleep 1
+	check "Accounting-Start received" sh -c "cat $ACCT/detail-* | grep -q 'Acct-Status-Type = Start'"
+	check "Start carries Class + Calling-Station-Id + IPv6" sh -c "cat $ACCT/detail-* | grep -q 'Class = 0x676f6c642d706c616e' && cat $ACCT/detail-* | grep -q 'Calling-Station-Id = \"02:00:00:00:99:10\"' && cat $ACCT/detail-* | grep -q 'Framed-IPv6-Address = fd99'"
+	ccurl -o /dev/null http://10.98.0.2/big.bin
+	sleep 12
+	poll_wait
+	check "Interim-Update with traffic" sh -c "cat $ACCT/detail-* | grep -A30 'Interim-Update' | grep -E 'Acct-Output-Octets = [0-9]{6,}' -q"
+	check "Interim carries gigawords" sh -c "cat $ACCT/detail-* | grep -q 'Acct-Output-Gigawords = 0'"
+	s=$(sid radalice)
+	out=$(printf 'Acct-Session-Id = "%s"\nMessage-Authenticator = 0x00\n' "$s" | radclient -r1 -t3 127.0.0.1:3799 disconnect testing123 2>&1)
+	check "Disconnect-Request acknowledged" sh -c "echo '$out' | grep -q 'Disconnect-ACK'"
+	check_not "offline after Disconnect" online4
+	check "Stop with Admin-Reset" sh -c "cat $ACCT/detail-* | grep -B30 'Acct-Terminate-Cause = Admin-Reset' | grep -q radalice"
+	out=$(printf 'Acct-Session-Id = "deadbeef"\nMessage-Authenticator = 0x00\n' | radclient -r1 -t3 127.0.0.1:3799 disconnect testing123 2>&1)
+	check "Disconnect for unknown session NAKed" sh -c "echo '$out' | grep -q 'Disconnect-NAK'"
+	out=$(printf 'User-Name = "nobody"\n' | radclient -r1 -t3 127.0.0.1:3799 disconnect testing123 2>&1)
+	check_not "Disconnect without Message-Authenticator ignored" sh -c "echo '$out' | grep -qE 'Disconnect-(ACK|NAK)'"
+
+	post_has 'username=radalice&password=radpw' 'You are connected'
+	out=$(printf 'User-Name = "radalice"\nSession-Timeout = 4\nMikrotik-Rate-Limit = "1M/1M"\nMessage-Authenticator = 0x00\n' | radclient -r1 -t3 127.0.0.1:3799 coa testing123 2>&1)
+	check "CoA acknowledged" sh -c "echo '$out' | grep -q 'CoA-ACK'"
+	check "CoA changed the rate limit" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radalice'].rate_limit\")\" = 1M/1M ]"
+	sleep 4
+	poll_wait
+	check_not "CoA Session-Timeout ended the session" online4
+
+	chap=$(ubus call wrthotspot client '{"ip":"10.99.0.10"}')
+	id=$(echo "$chap" | jsonfilter -e '@.chap_id_hex')
+	ch=$(echo "$chap" | jsonfilter -e '@.chap_challenge_hex')
+	hash=$(ucode -e "import { md5 } from 'digest'; print(md5(hexdec('$id') + 'radpw' + hexdec('$ch')));")
+	check "RADIUS CHAP login" post_has "username=radalice&password=$hash" 'You are connected'
+	wrthotspot logout radalice >/dev/null
+
+	check "Access-Reject shows Reply-Message" post_has 'username=radbad&password=x' 'Account suspended'
+	check "unknown RADIUS user rejected" post_has 'username=nosuchuser&password=x' 'invalid username or password'
+	check_not "still offline after rejects" online4
+
+	post_has 'username=radshort&password=x' 'You are connected'
+	sleep 6
+	poll_wait
+	check_not "RADIUS Session-Timeout logs out" online4
+	check "Stop with Session-Timeout" sh -c "cat $ACCT/detail-* | grep -A40 'User-Name = \"radshort\"' | grep -q 'Acct-Terminate-Cause = Session-Timeout'"
+
+	post_has 'username=radquota&password=x' 'You are connected'
+	ccurl -o /dev/null http://10.98.0.2/big.bin
+	poll_wait
+	check_not "Mikrotik-Xmit-Limit enforced" online4
+	check "Stop with NAS-Request for traffic limit" sh -c "cat $ACCT/detail-* | grep -A40 'User-Name = \"radquota\"' | grep -q 'Acct-Terminate-Cause = NAS-Request'"
+
+	post_has 'username=radgroup&password=x' 'You are connected'
+	check "Mikrotik-Group selects user profile" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radgroup'].profile\")\" = idleprof ]"
+	wrthotspot logout radgroup >/dev/null
+
+	post_has 'username=radwispr&password=x' 'You are connected'
+	check "WISPr-Session-Terminate-Time applied" sh -c "t=\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radwispr'].limits.max_uptime\"); [ \$t -gt 0 ] && [ \$t -le 26 ]"
+	wrthotspot logout radwispr >/dev/null
+
+	wrthotspot cookie del 02:00:00:00:99:10 >/dev/null
+	uci set wrthotspot.@server_profile[0].mac_auth_password=macsecret
+	uci add_list wrthotspot.@server_profile[0].login_by=mac
+	uci commit wrthotspot
+	reload_hs
+	C ping -c1 -W1 10.99.0.1 >/dev/null 2>&1
+	sleep 2
+	check "MAC authentication via RADIUS (no page)" online4
+	check "session shows login by mac" sh -c "wrthotspot sessions | grep '02:00:00:00:99:10' | grep -q ' mac '"
+	uci del_list wrthotspot.@server_profile[0].login_by=mac
+	uci set wrthotspot.@server_profile[0].use_radius=0
+	uci commit wrthotspot
+	reload_hs
+	wrthotspot logout 02:00:00:00:99:10 >/dev/null
+	/etc/init.d/radiusd stop
+else
+	skip "RADIUS tests (freeradius3 not installed)"
+fi
 
 echo "== HTTPS login + RFC 8910"
 if ls /lib/libustream-ssl.so* >/dev/null 2>&1; then

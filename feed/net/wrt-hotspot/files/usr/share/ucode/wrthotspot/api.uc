@@ -45,7 +45,10 @@ export function publish(conn, core) {
 		login: {
 			args: { ip: '', mac: '', method: '', username: '', password: '', chap_response: '', cookie: '' },
 			call: function(req) {
-				return core.login(req.args);
+				let res = core.login(req.args, (r) => req.reply(r));
+
+				// RADIUS logins answer later: keep the ubus request open.
+				return (res != null) ? res : req.defer();
 			},
 		},
 
