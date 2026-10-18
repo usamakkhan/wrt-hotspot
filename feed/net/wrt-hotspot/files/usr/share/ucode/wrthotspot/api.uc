@@ -6,17 +6,30 @@ import * as uloop from 'uloop';
 import { public_view } from 'wrthotspot.users';
 import { VERSION, CAUSE } from 'wrthotspot.core';
 import { run_checks } from 'wrthotspot.diag';
+import * as vouchers from 'wrthotspot.vouchers';
+import * as operators from 'wrthotspot.operators';
 import { run, shell_quote } from 'wrthotspot.util';
 
 const USER_ARGS = {
 	name: '', password: '', profile: '', server: '', mac: '',
 	limit_uptime: '', limit_bytes_in: '', limit_bytes_out: '', limit_bytes_total: '',
 	disabled: false, comment: '', email: '',
+	validity: '', expires: '', price: '', batch: '',
 };
 
 export function publish(conn, core) {
 	function err(msg) {
 		return { ok: false, error: msg };
+	}
+
+	// Login name behind an rpcd session (LuCI / operator panel), for audit.
+	function caller(req) {
+		let sid = req.args.ubus_rpc_session;
+
+		if (!sid)
+			return 'root';
+
+		return conn.call('session', 'get', { ubus_rpc_session: sid })?.values?.username ?? '';
 	}
 
 	let methods = {
@@ -124,6 +137,114 @@ export function publish(conn, core) {
 					return err('mac or user is required');
 
 				return { ok: true, count: core.cookie_remove(req.args) };
+			},
+		},
+
+		// Who am I (operator panel): login name and what the session may do.
+		whoami: {
+			call: function(req) {
+				let sid = req.args.ubus_rpc_session;
+				let admin = sid ? !!conn.call('session', 'access', { ubus_rpc_session: sid, scope: 'ubus', object: 'wrthotspot', function: 'operator_set' })?.access : true;
+
+				return { username: caller(req), admin };
+			},
+		},
+
+		profiles: {
+			call: function() {
+				let cfg = core.config();
+				let out = {};
+
+				for (let n, p in cfg.user_profiles)
+					out[n] = { rate_limit: p.rate_limit, session_timeout: p.session_timeout, shared_users: p.shared_users, limitations: p.limitations };
+
+				return { user_profiles: out, servers: keys(cfg.servers) };
+			},
+		},
+
+		voucher_create: {
+			args: {
+				profile: '', count: 0, prefix: '', length: 0, charset: '', password: '', password_length: 0,
+				validity: '', limit_uptime: '', limit_bytes_total: '', limit_bytes_in: '', limit_bytes_out: '',
+				price: '', comment: '', server: '',
+			},
+			call: function(req) {
+				let res = vouchers.create(core.users(), req.args, caller(req), core.config().user_profiles);
+				return res[0] ? { ok: true, ...res[0] } : err(res[1]);
+			},
+		},
+
+		voucher_batches: {
+			call: function() {
+				return { batches: vouchers.batches(core.users()) };
+			},
+		},
+
+		voucher_list: {
+			args: { batch: '' },
+			call: function(req) {
+				if (!req.args.batch)
+					return err('batch is required');
+
+				return { vouchers: vouchers.list(core.users(), req.args.batch) };
+			},
+		},
+
+		voucher_revoke: {
+			args: { batch: '', all: false },
+			call: function(req) {
+				let names = vouchers.revoke(core.users(), req.args.batch, req.args.all);
+
+				for (let n in names)
+					core.logout_where({ user: n }, CAUSE.USER_REMOVED);
+
+				return { ok: true, count: length(names) };
+			},
+		},
+
+		history: {
+			args: { from: 0, to: 0, search: '', limit: 0 },	// int32 epochs: rpcd sends small JSON numbers as int32
+			call: function(req) {
+				return { history: core.records().query(req.args) };
+			},
+		},
+
+		report: {
+			args: { from: 0, to: 0, group: '' },
+			call: function(req) {
+				let a = req.args;
+				let to = a.to || time();
+				let from = a.from || (to - 7 * 86400);
+				let r = core.records().report(from, to, a.group || 'day');
+
+				r.online = length(core.sessions());
+				return r;
+			},
+		},
+
+		operator_list: {
+			call: function() {
+				return { operators: operators.list() };
+			},
+		},
+
+		operator_set: {
+			args: { username: '', password: '', role: '', comment: '' },
+			call: function(req) {
+				let a = req.args;
+				let e = operators.set(a.username, (a.password === '' || a.password == null) ? null : a.password, a.role || 'operator', a.comment);
+				return e ? err(e) : { ok: true };
+			},
+		},
+
+		operator_remove: {
+			args: { username: '' },
+			call: function(req) {
+				if (req.args.username == caller(req))
+					return err('you cannot remove your own account');
+
+				let e = operators.remove(req.args.username);
+				return e ? err(e) : { ok: true };
 			},
 		},
 

@@ -360,8 +360,12 @@ post_has 'username=carol&password=carolpw' 'You are connected'
 check "MAC cookie stored" sh -c "wrthotspot cookies | grep mac | grep -q carol"
 sleep 5
 poll_wait
-check_not "carol idled out again" online4
-C ping -c1 -W1 10.99.0.1 >/dev/null 2>&1
+# Browsing would bring the device back (and the MAC cookie logs it in), so
+# check the logout in the session history instead.
+check "carol idled out again" sh -c "ubus call wrthotspot history '{\"search\":\"carol\",\"limit\":1}' | jsonfilter -e '@.history[0].cause' | grep -qx idle-timeout"
+# A returning device probes connectivity (the portal sees it and the MAC
+# cookie logs it in), like phones do when they rejoin.
+C curl -s -m 3 -o /dev/null http://10.98.0.2/generate_204
 sleep 1
 check "device back: logged in by MAC cookie, no page" online4
 check "session shows mac-cookie login" sh -c "wrthotspot sessions | grep carol | grep -q mac-cookie"

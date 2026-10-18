@@ -212,6 +212,8 @@ export function load(confdir) {
 			walled_garden_ttl: dur(g.walled_garden_ttl, '1h') || 3600,
 			// RFC 5176 CoA / Disconnect-Request listener; 0 disables it.
 			coa_port: int(g.coa_port ?? 3799),
+			// Finished sessions and voucher sales kept for history and reports.
+			history_size: int(g.history_size ?? 2000),
 			// Rate limiting: auto (tc if available, else nft), tc, nft or off.
 			shaper: g.shaper ?? 'auto',
 			// Root class rate of the tc trees; keep above the real link speed.

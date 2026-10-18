@@ -12,6 +12,9 @@ const FIELDS = {
 	password: 'string', profile: 'string', server: 'string', mac: 'mac',
 	limit_uptime: 'duration', limit_bytes_in: 'size', limit_bytes_out: 'size', limit_bytes_total: 'size',
 	disabled: 'bool', comment: 'string', email: 'string',
+	// Vouchers: validity runs from the first login (MikroTik User Manager
+	// "starts when first auth"); expires is an absolute end (0 = none).
+	validity: 'duration', expires: 'epoch', price: 'string', batch: 'string',
 };
 
 function coerce(kind, v) {
@@ -21,6 +24,7 @@ function coerce(kind, v) {
 	case 'mac': return (v == null || v === '' || v === '00:00:00:00:00:00') ? '' : normalize_mac(v);
 	case 'duration': return parse_duration(v);
 	case 'size': return parse_size(v);
+	case 'epoch': return (v == null || v === '' || v === 0 || v === '0') ? 0 : (match(`${v}`, /^[0-9]+$/) ? int(v) : null);
 	}
 }
 
@@ -71,8 +75,9 @@ export function create(db_dir) {
 
 		count: function() { return length(keys(users)); },
 
-		// Create or update; returns [ user, error ].
-		set: function(name, attrs) {
+		// Create or update; returns [ user, error ]. nosave: caller saves
+		// once after a batch (voucher generation).
+		set: function(name, attrs, nosave) {
 			if (!valid_name(name))
 				return [ null, 'invalid user name' ];
 
@@ -80,6 +85,8 @@ export function create(db_dir) {
 				name, password: '', profile: 'default', server: 'all', mac: '',
 				limit_uptime: 0, limit_bytes_in: 0, limit_bytes_out: 0, limit_bytes_total: 0,
 				disabled: false, comment: '', email: '',
+				validity: 0, expires: 0, price: '', batch: '',
+				created: time(),
 				used: { uptime: 0, bytes_in: 0, bytes_out: 0 },
 			};
 
@@ -97,9 +104,44 @@ export function create(db_dir) {
 
 			users[name] = u;
 			dirty = true;
-			db.save(true);
+
+			if (!nosave)
+				db.save(true);
 
 			return [ u, null ];
+		},
+
+		// Fields maintained by hotspotd itself (first_login, created, ...).
+		set_internal: function(name, attrs) {
+			let u = users[name];
+
+			if (!u)
+				return false;
+
+			for (let k, v in attrs)
+				u[k] = v;
+
+			dirty = true;
+			return true;
+		},
+
+		exists: (name) => !!users[name],
+
+		remove_many: function(names) {
+			let n = 0;
+
+			for (let name in names)
+				if (users[name]) {
+					delete users[name];
+					n++;
+				}
+
+			if (n) {
+				dirty = true;
+				db.save(true);
+			}
+
+			return n;
 		},
 
 		remove: function(name) {

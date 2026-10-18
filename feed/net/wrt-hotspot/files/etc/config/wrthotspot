@@ -15,6 +15,8 @@ config global 'global'
 	# Walled-garden hosts: re-resolve interval and how long addresses stay.
 	option resolve_interval '5m'
 	option walled_garden_ttl '1h'
+	# Finished sessions and voucher sales kept for history and reports.
+	option history_size '2000'
 	option log_level 'info'
 	# NAS-Identifier sent to RADIUS.
 	option nas_identifier 'WrtHotspot'

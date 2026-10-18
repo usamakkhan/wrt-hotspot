@@ -2,6 +2,7 @@
 // wrthotspot: command line front-end for hotspotd.
 'use strict';
 
+import * as fs from 'fs';
 import * as ubus from 'ubus';
 import { cursor } from 'uci';
 import { fmt_duration, fmt_bytes, run } from 'wrthotspot.util';
@@ -22,6 +23,13 @@ const USAGE = `Usage: wrthotspot <command> [args]
   logout <ip|mac|user|id>     log out matching sessions
   cookies                     HTTP and MAC cookies
   cookie del <mac|user>       remove cookies of a device or user
+  vouchers                    voucher batches
+  vouchers new <count> [k=v]  create a batch (profile=, length=, charset=, prefix=,
+                              password=same|separate, validity=, price=, ...)
+  operators                   operator panel accounts
+  operator add <user> <role>  create/update an account (role: operator|admin);
+                              asks for the password on stdin
+  operator del <user>         remove an account
   cert <dns-name>             create a self-signed certificate for HTTPS login
                               (use a real certificate for production)
   setup <network>             create firewall zone/rules, DHCP + server for a network
@@ -325,6 +333,52 @@ case 'cookie':
 
 	let cargs = match(csel, /^([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}$/) ? { mac: csel } : { user: csel };
 	print(`Removed ${ok(call('cookie_remove', cargs)).count} cookie(s)\n`);
+	break;
+
+case 'vouchers':
+	if (args[0] == 'new') {
+		shift(args);
+		let count = int(shift(args) ?? 0);
+		let opts = kv_args(args);
+
+		for (let k in [ 'length', 'password_length' ])
+			if (exists(opts, k))
+				opts[k] = int(opts[k]);
+
+		let r = ok(call('voucher_create', { count, ...opts }));
+
+		print(`Batch ${r.batch}:\n`);
+		for (let v in r.vouchers)
+			print((v.password == v.name) ? `  ${v.name}\n` : `  ${v.name}  ${v.password}\n`);
+		break;
+	}
+
+	table(map(call('voucher_batches').batches, (b) => [
+		b.batch, b.profile, `${b.count}`, `${b.used}`, b.validity ? fmt_duration(b.validity) : '-', b.price || '-', b.created_by, b.comment,
+	]), [ 'BATCH', 'PROFILE', 'COUNT', 'USED', 'VALID', 'PRICE', 'BY', 'NOTE' ]);
+	break;
+
+case 'operators':
+	table(map(call('operator_list').operators, (o) => [ o.username, o.role, o.comment ]), [ 'USER', 'ROLE', 'NOTE' ]);
+	break;
+
+case 'operator':
+	let osub = shift(args), ouser = shift(args);
+
+	if (osub == 'add' || osub == 'set') {
+		let role = shift(args) ?? 'operator';
+		printf('Password for %s (empty keeps the current one): ', ouser);
+		let pw = rtrim(fs.stdin.read('line') ?? '', '\r\n');
+		print('\n');
+		ok(call('operator_set', { username: ouser, password: pw, role }));
+		print(`Operator ${ouser} saved; the panel is at http://<router>/hotspot/\n`);
+	}
+	else if (osub == 'del' || osub == 'remove') {
+		ok(call('operator_remove', { username: ouser }));
+	}
+	else {
+		die(USAGE);
+	}
 	break;
 
 case 'cert':

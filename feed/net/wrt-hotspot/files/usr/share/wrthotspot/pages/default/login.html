@@ -7,6 +7,8 @@
 <script>
 function doLogin() {
 	var f = document.sendin, p = document.login.password.value;
+	// Voucher codes: the code alone logs in (its password is the code).
+	if (!p) p = document.login.username.value;
 	f.username.value = document.login.username.value;
 	f.password.value = '$(chap-id)' ? hexMD5('$(chap-id)' + utf8Bytes(p) + '$(chap-challenge)') : p;
 	f.submit();
@@ -23,10 +25,10 @@ function doLogin() {
 	</form>
 	<form name="login" action="$(link-login-only)" method="post" $(if chap-id)onsubmit="return doLogin()"$(endif)>
 		<input type="hidden" name="dst" value="$(link-orig)">
-		<label for="u">Username</label>
+		<label for="u">Username or voucher code</label>
 		<input id="u" type="text" name="username" value="$(username)" autocomplete="username" autocapitalize="off" autofocus>
 		<label for="p">Password</label>
-		<input id="p" type="password" name="password" autocomplete="current-password">
+		<input id="p" type="password" name="password" autocomplete="current-password" placeholder="not needed for voucher codes">
 		$(if error)<p class="err">$(error)</p>$(endif)
 		<button type="submit">Sign in</button>
 	</form>

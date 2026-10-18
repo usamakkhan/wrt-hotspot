@@ -1,0 +1,32 @@
+{
+	"wrthotspot-operator": {
+		"description": "Hotspot operator: users, vouchers, sessions, history and reports",
+		"read": {
+			"ubus": {
+				"wrthotspot": [ "status", "sessions", "hosts", "user_list", "user_get", "profiles", "whoami",
+					"voucher_batches", "voucher_list", "history", "report" ],
+				"session": [ "access" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"wrthotspot": [ "user_set", "user_remove", "user_reset_counters", "logout",
+					"voucher_create", "voucher_revoke" ]
+			}
+		}
+	},
+
+	"wrthotspot-admin": {
+		"description": "Hotspot administrator: operator accounts on top of the operator rights",
+		"read": {
+			"ubus": {
+				"wrthotspot": [ "operator_list", "check" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"wrthotspot": [ "operator_set", "operator_remove" ]
+			}
+		}
+	}
+}

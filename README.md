@@ -3,8 +3,8 @@
 A MikroTik-Hotspot-class captive portal for OpenWrt 24.10+, with full IPv6 support, RADIUS (incl. CoA),
 vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 
-Status: **Phases 1–5 working**, tested end to end on OpenWrt 25.12.5 x86-64 against FreeRADIUS 3.2.10,
-with rates measured by iperf3 (137/137 checks).
+Status: **Phases 1–6 working**, tested end to end on OpenWrt 25.12.5 x86-64 against FreeRADIUS 3.2.10,
+with rates measured by iperf3 (137 + 48 end-to-end checks).
 
 - [docs/research.md](docs/research.md) — stack, prior art, dataplane and MikroTik feature research
 - [docs/architecture.md](docs/architecture.md) — architecture, phases and MikroTik parity matrix
@@ -47,6 +47,22 @@ with rates measured by iperf3 (137/137 checks).
   every window are refused and sessions end when the window closes.
 - `wrthotspot` CLI: `setup <network>` wizard (zone, rules, DHCP/RA, offload off, server), `cert`, `cookies`, …
 
+## Operator panel
+
+`wrt-hotspot-panel` serves a staff panel at `http://<router>/hotspot/` (no external libraries, works
+offline, phone-friendly): a dashboard (online now, today's sessions, traffic, vouchers sold, revenue,
+7-day charts), voucher batches (profile, count, prefix, code length and alphabet without look-alikes,
+PIN or code + password, validity from first use, online-time/data limits, price), printable voucher
+sheets (cards, tickets or list, with your title and note) and CSV export, user management (edit,
+extend, reset, delete), who is online (with logout), session history with search and CSV, and
+reports grouped by day, hour, user, batch, profile, server or login method.
+
+Staff log in with their own accounts, created with `wrthotspot operator add <user> operator|admin`
+or by an admin in the panel. They are rpcd logins with salted MD5-crypt passwords, confined by rpcd
+ACLs: operators get users, vouchers, sessions, history and reports, admins additionally manage
+operators, and neither can touch the router's configuration. Batches record which operator made
+them. Voucher codes log in on the portal with the code alone.
+
 ## LuCI app
 
 `luci-app-wrt-hotspot` adds **Services → Hotspot** with ten pages: Status (live sessions with logout,
@@ -73,9 +89,11 @@ change addresses (SLAAC, privacy extensions). Bind IPv6 devices by MAC.
 ```
 feed/net/wrt-hotspot/           OpenWrt package (add feed/ as a src-link feed)
 feed/luci/luci-app-wrt-hotspot/ LuCI app (views in htdocs/, menu + ACL in root/)
+feed/net/wrt-hotspot-panel/     operator panel (www/hotspot/) + rpcd ACL for staff roles
   files/usr/sbin/hotspotd       daemon (ucode, uloop, ubus object "wrthotspot")
   files/usr/sbin/wrthotspot     CLI
-  files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, dns, radius, shaper, limits, diag, template, util
+  files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, dns, radius, shaper, limits, diag,
+                                vouchers, records, operators, template, util
   files/usr/share/wrthotspot/   portal.uc (uhttpd handler) and default pages
 tests/unit/                     ucode unit tests        (sh tests/run-unit.sh)
 tests/integration/              end-to-end netns test   (sh tests/integration/netns-test.sh)

@@ -12,6 +12,7 @@ import * as shaper from 'wrthotspot.shaper';
 import * as sched from 'wrthotspot.limits';
 import * as users_db from 'wrthotspot.users';
 import * as hosts_mod from 'wrthotspot.hosts';
+import * as records_mod from 'wrthotspot.records';
 import { load as load_config } from 'wrthotspot.config';
 import {
 	log, set_log_level, normalize_mac, normalize_ip, random_bytes, random_hex, run,
@@ -67,6 +68,7 @@ export function create(opts) {
 	let cookies_dirty = false;
 	let users;
 	let hosts;
+	let records;			// session history + voucher sales
 	let need_rebuild = true;
 	let dev_info = {};		// dev -> { ip4 } (NAS-IP-Address)
 	let rad = radius.client();
@@ -414,6 +416,10 @@ export function create(opts) {
 			delete chap[mac];
 			return ok;
 		}
+
+		// Voucher in PIN mode (password = code): the code alone is enough.
+		if ((password == null || password === '') && user.batch && user.password === user.name)
+			return true;
 
 		return password != null && password === user.password;
 	}
@@ -981,7 +987,38 @@ export function create(opts) {
 		    (user.limit_bytes_total && used.bytes_in + used.bytes_out >= user.limit_bytes_total))
 			return fail('traffic-limit', 'traffic limit reached');
 
-		return finish_login(mac, server, username, user.profile, method, user, null);
+		let now = time();
+
+		if (user.expires && now >= user.expires)
+			return fail('expired', 'this voucher has expired');
+
+		let res = finish_login(mac, server, username, user.profile, method, user, null);
+
+		if (!res.ok)
+			return res;
+
+		// First use: a voucher's validity starts now and it counts as sold.
+		if (!user.first_login) {
+			let upd = { first_login: now };
+
+			if (user.validity && !user.expires)
+				upd.expires = now + user.validity;
+
+			users.set_internal(username, upd);
+			users.save(true);
+
+			if (user.batch || user.price)
+				records.add_sale({ time: now, user: username, batch: user.batch ?? '', price: user.price ?? '', profile: user.profile });
+		}
+
+		let s = sessions[res.session.slot];
+
+		if (user.expires && s) {
+			s.limits.max_uptime = min_lim(s.limits.max_uptime, user.expires - s.started);
+			res.session = self.session_view(s);
+		}
+
+		return res;
 	}
 
 	function radius_profile(authz) {
@@ -1280,6 +1317,14 @@ export function create(opts) {
 		if (!(cause in COOKIE_KEEP))
 			drop_cookies(s.mac);
 
+		let h = hosts.get(s.mac);
+		records.add_session({
+			start: s.started, end: time(), user: s.user, mac: s.mac,
+			ipv4: h ? (sort(keys(h.ip4))[0] ?? '') : '', ipv6: h ? length(keys(h.ip6)) : 0,
+			server: s.server, profile: s.profile, login_by: s.login_by, auth: s.radius ? 'radius' : 'local',
+			batch: users.get(s.user)?.batch ?? '', uptime, bytes_in: t.bytes_in, bytes_out: t.bytes_out, cause,
+		});
+
 		acct_send(s, radius.ACCT_STOP, cause);
 
 		log('info', 'Logout %s (%s): %s, %s, in %d / out %d bytes', s.user, s.mac, cause, fmt_duration(uptime), t.bytes_in, t.bytes_out);
@@ -1435,7 +1480,10 @@ export function create(opts) {
 	self.sync_db = function() {
 		users.save(false);
 		save_cookies(false);
+		records.save(false);
 	};
+
+	self.records = () => records;
 
 	/* ---------- startup / shutdown ---------- */
 
@@ -1475,6 +1523,9 @@ export function create(opts) {
 		log('info', 'Loaded %d user(s)', users.load());
 		load_cookies();
 
+		records = records_mod.create(cfg.global.db_dir, cfg.global.history_size);
+		records.load();
+
 		hosts = hosts_mod.create({
 			on_seen: (h) => {
 				let slot = by_mac[h.mac];
@@ -1510,6 +1561,7 @@ export function create(opts) {
 		checkpoint();
 		users.save(true);
 		save_cookies(true);
+		records.save(true);
 	};
 
 	self.flush = function() {
