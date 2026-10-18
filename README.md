@@ -3,11 +3,14 @@
 A MikroTik-Hotspot-class captive portal for OpenWrt 24.10+, with full IPv6 support, RADIUS (incl. CoA),
 vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 
-Status: **Phases 1–6 working**, tested end to end on OpenWrt 25.12.5 x86-64 against FreeRADIUS 3.2.10,
-with rates measured by iperf3 (137 + 48 end-to-end checks).
+Status: **Phases 1–6 working, Phase 7 qualified on x86** (0.7.0): tested end to end on OpenWrt 25.12.5
+x86-64 against FreeRADIUS 3.2.10, rates measured by iperf3 (137 + 48 end-to-end checks), 2000 sessions
+on one 236 MB VM and 150 simultaneous real clients through the portal. Packages build with the official
+24.10 (ipk) and 25.12 (apk) SDKs. Physical MIPS/ARM routers are still to be tested.
 
 - [docs/research.md](docs/research.md) — stack, prior art, dataplane and MikroTik feature research
 - [docs/architecture.md](docs/architecture.md) — architecture, phases and MikroTik parity matrix
+- [docs/qualification.md](docs/qualification.md) — load and traffic tests, capacity guidance
 
 ## What works today
 
@@ -95,15 +98,31 @@ feed/net/wrt-hotspot-panel/     operator panel (www/hotspot/) + rpcd ACL for sta
   files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, dns, radius, shaper, limits, diag,
                                 vouchers, records, operators, template, util
   files/usr/share/wrthotspot/   portal.uc (uhttpd handler) and default pages
+scripts/build-packages.sh       builds all packages with the official SDK of a release
 tests/unit/                     ucode unit tests        (sh tests/run-unit.sh)
-tests/integration/              end-to-end netns test   (sh tests/integration/netns-test.sh)
+tests/integration/              end-to-end netns test   (sh tests/integration/netns-test.sh),
+                                panel API test, 2000-session load test, real-traffic test
 ```
+
+## Build the packages
+
+On a Linux host with the [SDK prerequisites](https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem):
+
+```sh
+scripts/build-packages.sh 24.10.8     # -> dist/24.10.8/*.ipk
+scripts/build-packages.sh 25.12.6     # -> dist/25.12.6/*.apk
+```
+
+The packages are architecture independent, so one build serves every target of a release. CI
+(`.github/workflows/ci.yml`) runs the unit tests in the OpenWrt rootfs images and builds both sets.
 
 ## Try it on a router (24.10+)
 
 ```sh
-apk add ucode-mod-digest ucode-mod-rtnl ucode-mod-uloop uhttpd uhttpd-mod-ucode   # opkg on 24.10
-sh tests/integration/install-dev.sh
+cd /tmp/25.12.6 && apk add --allow-untrusted ./*.apk     # 25.12 (unsigned local packages)
+cd /tmp/24.10.8 && opkg install ./*.ipk                   # 24.10
+# from a source checkout instead (dependencies from feed/net/wrt-hotspot/Makefile first):
+#   sh tests/integration/install-dev.sh
 wrthotspot setup <network>          # e.g. a dedicated "hotspot" interface
 service firewall reload && service wrthotspot restart
 wrthotspot user add alice password=secret

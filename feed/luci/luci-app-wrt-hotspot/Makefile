@@ -4,6 +4,8 @@ LUCI_TITLE:=LuCI support for WrtHotspot (MikroTik-class captive portal)
 LUCI_DEPENDS:=+wrt-hotspot +luci-base
 LUCI_PKGARCH:=all
 
+PKG_VERSION:=0.7.0
+PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_MAINTAINER:=Usama Khan
 

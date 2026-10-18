@@ -9,5 +9,6 @@ cp "$SRC/usr/sbin/wrthotspot" /usr/sbin/wrthotspot && chmod 0755 /usr/sbin/wrtho
 mkdir -p /usr/share/ucode/wrthotspot /usr/share/wrthotspot/pages/default
 cp "$SRC"/usr/share/ucode/wrthotspot/*.uc /usr/share/ucode/wrthotspot/
 cp "$SRC/usr/share/wrthotspot/portal.uc" /usr/share/wrthotspot/
+mkdir -p /etc/sysctl.d && cp "$SRC/etc/sysctl.d/12-wrthotspot.conf" /etc/sysctl.d/ && sysctl -q -p /etc/sysctl.d/12-wrthotspot.conf
 cp "$SRC"/usr/share/wrthotspot/pages/default/* /usr/share/wrthotspot/pages/default/
 echo "installed"

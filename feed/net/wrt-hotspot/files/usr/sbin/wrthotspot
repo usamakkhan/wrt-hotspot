@@ -53,6 +53,20 @@ function call(method, args) {
 	return res;
 }
 
+// Every page of a paged list method.
+function all(method, key) {
+	let out = [];
+
+	for (let offset = 0; ; ) {
+		let r = call(method, { offset, limit: 1000 });
+		push(out, ...(r[key] ?? []));
+		offset += length(r[key] ?? []);
+
+		if (!length(r[key] ?? []) || offset >= (r.total ?? 0))
+			return out;
+	}
+}
+
 function table(rows, cols) {
 	let w = map(cols, (c) => length(c));
 
@@ -268,20 +282,20 @@ case 'status':
 	break;
 
 case 'sessions':
-	table(map(call('sessions').sessions, (s) => [
+	table(map(all('sessions', 'sessions'), (s) => [
 		s.user, s.mac, join(',', s.ipv4), length(s.ipv6) ? `${length(s.ipv6)} addr` : '-',
 		s.server, s.login_by, s.uptime_text, fmt_bytes(s.bytes_in), fmt_bytes(s.bytes_out), s.id,
 	]), [ 'USER', 'MAC', 'IPV4', 'IPV6', 'SERVER', 'BY', 'UPTIME', 'IN', 'OUT', 'ID' ]);
 	break;
 
 case 'hosts':
-	table(map(call('hosts').hosts, (h) => [
+	table(map(all('hosts', 'hosts'), (h) => [
 		h.mac, h.authorized ? 'A' : '-', h.server, h.dev, join(',', h.ipv4), join(' ', h.ipv6),
 	]), [ 'MAC', 'AUTH', 'SERVER', 'DEV', 'IPV4', 'IPV6' ]);
 	break;
 
 case 'users':
-	table(map(call('user_list').users, (u) => [
+	table(map(all('user_list', 'users'), (u) => [
 		u.name, u.profile, u.server, u.mac || '-', u.disabled ? 'X' : '',
 		fmt_duration(u.used?.uptime), fmt_bytes(u.used?.bytes_in), fmt_bytes(u.used?.bytes_out), u.comment,
 	]), [ 'NAME', 'PROFILE', 'SERVER', 'MAC', 'DIS', 'UPTIME', 'IN', 'OUT', 'COMMENT' ]);

@@ -3,6 +3,8 @@ config global 'global'
 	# Seconds between counter reads / timeout checks.
 	option poll_interval '10s'
 	option portal_port '8002'
+	# Concurrent portal requests (each a ~0.4 MB worker); 8-16 on 64 MB routers.
+	#option portal_max_requests '32'
 	# HTTPS portal (login_by https, RFC 8908/8910). `wrthotspot cert <name>`
 	# creates a self-signed pair; use a real certificate in production.
 	#option https_port '8003'

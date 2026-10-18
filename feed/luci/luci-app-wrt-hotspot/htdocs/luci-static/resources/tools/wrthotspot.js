@@ -9,7 +9,8 @@ var callSessions = rpc.declare({ object: 'wrthotspot', method: 'sessions', expec
 var callHosts = rpc.declare({ object: 'wrthotspot', method: 'hosts', expect: { hosts: [] } });
 var callCookies = rpc.declare({ object: 'wrthotspot', method: 'cookies' });
 var callLogout = rpc.declare({ object: 'wrthotspot', method: 'logout', params: [ 'mac', 'user', 'id', 'cause' ] });
-var callUsers = rpc.declare({ object: 'wrthotspot', method: 'user_list', expect: { users: [] } });
+// Paged: { users, total, offset }.
+var callUsers = rpc.declare({ object: 'wrthotspot', method: 'user_list', params: [ 'offset', 'limit', 'search' ] });
 var callUserSet = rpc.declare({
 	object: 'wrthotspot', method: 'user_set',
 	params: [ 'name', 'password', 'profile', 'server', 'mac', 'limit_uptime', 'limit_bytes_in',

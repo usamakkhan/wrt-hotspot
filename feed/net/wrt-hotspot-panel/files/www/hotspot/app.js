@@ -444,24 +444,31 @@
 
 	function viewUsers(main) {
 		var search = input('search', stored('usersearch', ''), { placeholder: 'Search name, comment, batch' });
-		var tbody = h('tbody'), more = h('div');
-		var all = [], shown = 100;
+		var tbody = h('tbody'), more = h('div'), count = h('div', { 'class': 'muted', style: 'margin:0 0 8px' });
+		var list = [], total = 0, timer = null;
 
 		main.appendChild(h('h1', {}, 'Users'));
 		main.appendChild(h('div', { 'class': 'row', style: 'margin-bottom:12px' }, h('div', { 'class': 'grow' }, search),
-			h('button', { 'class': 'btn primary', onclick: function () { editUser(null, load); } }, 'Add user')));
+			h('button', { 'class': 'btn primary', onclick: function () { editUser(null, function () { load(false); }); } }, 'Add user')));
+		main.appendChild(count);
 		main.appendChild(h('div', { 'class': 'card' }, h('div', { 'class': 'tablewrap' }, h('table', {},
 			h('thead', {}, h('tr', {}, ['Name', 'Profile', 'State', 'Expires', 'Used', 'Limits', 'Comment', ''].map(function (t) { return h('th', {}, t); }))),
 			tbody)), more));
 
-		search.addEventListener('input', function () { store('usersearch', search.value); shown = 100; draw(); });
+		// Searching and paging happen on the router: there can be thousands of vouchers.
+		search.addEventListener('input', function () {
+			store('usersearch', search.value);
+			clearTimeout(timer);
+			timer = setTimeout(function () { load(false); }, 300);
+		});
+
+		function reload() { load(false); }
 
 		function draw() {
-			var q = search.value.toLowerCase();
-			var list = all.filter(function (u) { return !q || (u.name + ' ' + (u.comment || '') + ' ' + (u.batch || '')).toLowerCase().indexOf(q) >= 0; });
 			clear(tbody); clear(more);
+			count.textContent = total ? ('Showing ' + list.length + ' of ' + total) : '';
 			if (!list.length) tbody.appendChild(h('tr', {}, h('td', { colspan: 8, 'class': 'empty' }, 'No users')));
-			list.slice(0, shown).forEach(function (u) {
+			list.forEach(function (u) {
 				var used = u.used || {}, lim = [];
 				if (u.limit_uptime) lim.push(dur(u.limit_uptime));
 				if (u.limit_bytes_total) lim.push(bytes(u.limit_bytes_total));
@@ -472,38 +479,49 @@
 					h('td', { 'class': 'nowrap' }, dur(used.uptime) + ' · ' + bytes((used.bytes_in || 0) + (used.bytes_out || 0))),
 					h('td', {}, lim.join(', ') || '-'), h('td', {}, u.comment || (u.batch ? u.batch : '')),
 					h('td', { 'class': 'actions' },
-						h('button', { 'class': 'btn small', onclick: function () { editUser(u, load); } }, 'Edit'),
-						h('button', { 'class': 'btn small', onclick: function () { extendUser(u, load); } }, 'Extend'),
+						h('button', { 'class': 'btn small', onclick: function () { editUser(u, reload); } }, 'Edit'),
+						h('button', { 'class': 'btn small', onclick: function () { extendUser(u, reload); } }, 'Extend'),
 						h('button', { 'class': 'btn small', onclick: function () {
-							hs('user_reset_counters', { name: u.name }).then(function () { toast('Counters reset'); load(); }).catch(fail);
+							hs('user_reset_counters', { name: u.name }).then(function () { toast('Counters reset'); reload(); }).catch(fail);
 						} }, 'Reset'),
 						h('button', { 'class': 'btn small danger', onclick: function () {
 							modal('Delete ' + u.name + '?', h('p', {}, 'The user is deleted and logged out.'), [{ label: 'Delete', cls: 'danger', run: function () {
-								return hs('user_remove', { name: u.name }).then(function () { toast('Deleted'); load(); });
+								return hs('user_remove', { name: u.name }).then(function () { toast('Deleted'); reload(); });
 							} }]);
 						} }, 'Delete'))));
 			});
-			if (list.length > shown)
+			if (total > list.length)
 				more.appendChild(h('div', { style: 'text-align:center;margin-top:10px' },
-					h('button', { 'class': 'btn', onclick: function () { shown += 200; draw(); } }, 'Show more (' + (list.length - shown) + ' left)')));
+					h('button', { 'class': 'btn', onclick: function () { load(true); } }, 'Show more (' + (total - list.length) + ' left)')));
 		}
 
-		function load() { hs('user_list').then(function (r) { all = r.users; draw(); }).catch(fail); }
-		load();
+		function load(append) {
+			hs('user_list', { offset: append ? list.length : 0, limit: 200, search: search.value.trim() }).then(function (r) {
+				list = append ? list.concat(r.users) : r.users;
+				total = r.total || list.length;
+				draw();
+			}).catch(fail);
+		}
+
+		load(false);
 	}
 
 	/* Online now */
 
 	function viewSessions(main) {
-		var tbody = h('tbody');
+		var tbody = h('tbody'), count = h('div', { 'class': 'muted', style: 'margin:0 0 8px' });
+		var search = input('search', '', { placeholder: 'Search user, MAC or IP' });
 		main.appendChild(h('h1', {}, 'Online now'));
+		main.appendChild(h('div', { 'class': 'row', style: 'margin-bottom:12px' }, h('div', { 'class': 'grow' }, search)));
+		main.appendChild(count);
 		main.appendChild(h('div', { 'class': 'card' }, h('div', { 'class': 'tablewrap' }, h('table', {},
 			h('thead', {}, h('tr', {}, ['User', 'Device', 'Addresses', 'Since', 'Time left', 'Data', 'Rate limit', ''].map(function (t) { return h('th', {}, t); }))),
 			tbody))));
 
-		every(5, function () {
-			hs('sessions').then(function (r) {
+		function refresh() {
+			hs('sessions', { limit: 300, search: search.value.trim() }).then(function (r) {
 				clear(tbody);
+				count.textContent = (r.total > r.sessions.length) ? ('Showing ' + r.sessions.length + ' of ' + r.total + ' - search to narrow down') : (r.total + ' online');
 				if (!r.sessions.length) tbody.appendChild(h('tr', {}, h('td', { colspan: 8, 'class': 'empty' }, 'Nobody is online')));
 				r.sessions.forEach(function (s) {
 					tbody.appendChild(h('tr', {},
@@ -515,11 +533,14 @@
 						h('td', { 'class': 'nowrap' }, '↑' + bytes(s.bytes_in) + ' ↓' + bytes(s.bytes_out)),
 						h('td', {}, s.rate_limit || '-'),
 						h('td', { 'class': 'actions' }, h('button', { 'class': 'btn small danger', onclick: function () {
-							hs('logout', { id: s.id, cause: 'admin-reset' }).then(function () { toast(s.user + ' logged out'); }).catch(fail);
+							hs('logout', { id: s.id, cause: 'admin-reset' }).then(function () { toast(s.user + ' logged out'); refresh(); }).catch(fail);
 						} }, 'Log out'))));
 				});
 			}).catch(fail);
-		});
+		}
+
+		search.addEventListener('input', function () { clearTimeout(search._t); search._t = setTimeout(refresh, 300); });
+		every(5, refresh);
 	}
 
 	/* History */

@@ -48,13 +48,25 @@ function editValue(u, key) {
 
 return view.extend({
 	load: function() {
-		return Promise.all([ hs.users(), uci.load('wrthotspot') ]);
+		return Promise.all([ hs.users(0, 500, ''), uci.load('wrthotspot') ]);
 	},
 
 	refresh: function() {
-		return hs.users().then(L.bind(function(users) {
-			cbi_update_table('#hs-users', this.rows(users), E('em', _('No users yet')));
+		var q = document.getElementById('hs-user-search');
+
+		return hs.users(0, 500, q ? q.value.trim() : '').then(L.bind(function(r) {
+			cbi_update_table('#hs-users', this.rows(r.users || []), E('em', _('No users')));
+			this.showCount(r);
 		}, this));
+	},
+
+	showCount: function(r) {
+		var el = document.getElementById('hs-user-count');
+
+		if (el)
+			el.textContent = (r.total > (r.users || []).length)
+				? _('Showing %d of %d users - search to narrow down, or use the operator panel for vouchers.').format(r.users.length, r.total)
+				: _('%d users').format(r.total || 0);
 	},
 
 	rows: function(users) {
@@ -182,12 +194,23 @@ return view.extend({
 			].map(function(t) { return E('th', { 'class': 'th' }, t); }))
 		]);
 
-		cbi_update_table(table, this.rows(data[0] || []), E('em', _('No users yet')));
+		cbi_update_table(table, this.rows(data[0].users || []), E('em', _('No users yet')));
+
+		var search = E('input', { 'id': 'hs-user-search', 'class': 'cbi-input-text', 'type': 'search', 'placeholder': _('Search name, comment, batch') });
+		var timer = null;
+		search.addEventListener('input', L.bind(function() {
+			window.clearTimeout(timer);
+			timer = window.setTimeout(L.bind(this.refresh, this), 300);
+		}, this));
+
+		var count = E('div', { 'id': 'hs-user-count', 'class': 'cbi-value-description' });
+		window.setTimeout(L.bind(this.showCount, this, data[0]), 0);
 
 		return E('div', {}, [
 			E('h2', _('Hotspot users')),
 			E('div', { 'class': 'cbi-map-descr' }, _('Local accounts (MikroTik /ip hotspot user). Users unknown here are tried against RADIUS when a server profile uses RADIUS.')),
 			E('div', { 'class': 'cbi-section' }, [
+				search, count,
 				table,
 				E('div', { 'class': 'cbi-section-create' }, [
 					E('button', { 'class': 'btn cbi-button-add', 'click': ui.createHandlerFn(this, 'edit', null) }, _('Add user'))

@@ -19,7 +19,7 @@ import {
 	read_json, write_atomic, mkdir_p, fmt_duration, fmt_bytes
 } from 'wrthotspot.util';
 
-export const VERSION = '0.2.0';
+export const VERSION = '0.7.0';
 
 // MikroTik / RADIUS terminate causes.
 export const CAUSE = {
@@ -76,6 +76,9 @@ export function create(opts) {
 	let setup_shaper, reapply_rates;	// defined below, used by self.reload
 	let shp = null;			// shaper backend: tc object, 'nft' or null (off)
 	let polls = 0;
+	let started = false;
+	let last_resync = 0;
+	let last_rates = 0;
 	let try_mac_cookie;		// defined below, used by self.client
 	let auto_login;
 	let mac_tried = {};		// mac -> last automatic MAC login attempt
@@ -109,10 +112,38 @@ export function create(opts) {
 		return `${cfg.global.state_dir}/${name}`;
 	}
 
-	function checkpoint() {
+	let last_checkpoint = 0;
+
+	function checkpoint_now() {
+		last_checkpoint = time();
 		write_atomic(state_path('sessions.json'), sprintf('%J', {
 			version: 1, saved: time(), next_slot, sessions: values(sessions), trials,
 		}));
+	}
+
+	// The checkpoint grows with the session count: write it at most once a
+	// second instead of after every login/logout (recovery loses <= 1 s).
+	let cp_timer = null;
+
+	// Voucher activations must reach flash, but not one full-DB write per
+	// login: batch them into one save within 5 s.
+	let users_timer = null;
+
+	function save_users_soon() {
+		users_timer ??= uloop.timer(5000, () => {
+			users_timer = null;
+			users.save(false);
+		});
+	}
+
+	function checkpoint() {
+		if (cp_timer)
+			return;
+
+		cp_timer = uloop.timer(1000, () => {
+			cp_timer = null;
+			checkpoint_now();
+		});
 	}
 
 	function totals(s) {
@@ -203,11 +234,15 @@ export function create(opts) {
 
 	function drop_cookies(mac) {
 		for (let t, c in cookies)
-			if (c.mac == mac)
+			if (c.mac == mac) {
 				delete cookies[t];
+				cookies_dirty = true;
+			}
 
-		delete mac_cookies[mac];
-		cookies_dirty = true;
+		if (mac_cookies[mac]) {
+			delete mac_cookies[mac];
+			cookies_dirty = true;
+		}
 	}
 
 	// After a credential login: remember the device, as configured. For
@@ -320,17 +355,32 @@ export function create(opts) {
 		let err = self.rebuild();
 		apply_dns();
 		reapply_rates();
+		started = true;
 		return err;
 	};
 
 	self.devices = () => devices;
 
 	// Runtime facts for status and diagnostics.
-	self.runtime = () => ({
-		shaper: (shp == null) ? 'off' : (shp == 'nft') ? 'nft' : 'tc',
-		radius_backlog: rad.backlog(),
-		coa_listening: !!coa,
-	});
+	// Monotonic milliseconds, for the timings below.
+	function ms() {
+		let c = clock(true);
+		return c[0] * 1000 + int(c[1] / 1000000);
+	}
+
+	let perf = { poll_ms: 0, poll_max_ms: 0, rebuild_ms: 0, rebuild_rules_kb: 0 };
+
+	self.runtime = function() {
+		let rss = match(fs.readfile('/proc/self/status') ?? '', /VmRSS:[[:space:]]+([0-9]+)/);
+
+		return {
+			shaper: (shp == null) ? 'off' : (shp == 'nft') ? 'nft' : 'tc',
+			radius_backlog: rad.backlog(),
+			coa_listening: !!coa,
+			rss_kb: rss ? int(rss[1]) : null,
+			...perf,
+		};
+	};
 	self.config = () => cfg;
 
 	/* ---------- kernel state ---------- */
@@ -359,7 +409,11 @@ export function create(opts) {
 			wg_ttl: cfg.global.walled_garden_ttl,
 		});
 
+		let t0 = ms();
 		let err = nft.apply(text, cfg.global.state_dir);
+
+		perf.rebuild_ms = ms() - t0;
+		perf.rebuild_rules_kb = int(length(text) / 1024);
 
 		if (err) {
 			need_rebuild = true;
@@ -474,6 +528,9 @@ export function create(opts) {
 	self.sessions = function() {
 		return map(sort(keys(sessions), (a, b) => +a - +b), (k) => self.session_view(sessions[k]));
 	};
+
+	self.session_count = () => length(keys(sessions));
+	self.host_count = () => hosts.count();
 
 	self.hosts = function() {
 		return map(hosts.list(), (h) => ({ ...h, authorized: !!by_mac[h.mac] }));
@@ -718,11 +775,26 @@ export function create(opts) {
 		shp = 'nft';
 	};
 
+	// Active limitations change at most once a minute: cache them per
+	// profile for the current second (a poll asks once per session).
+	let lim_cache = { t: -1, by: {} };
+
 	function active_limitations(profile, now) {
+		if (lim_cache.t != now)
+			lim_cache = { t: now, by: {} };
+
+		if (exists(lim_cache.by, profile))
+			return lim_cache.by[profile];
+
+		let names = user_profile(profile).limitations ?? [];
+
+		if (!length(names))
+			return (lim_cache.by[profile] = []);
+
 		let tm = localtime(now);
 
-		return filter(map(user_profile(profile).limitations ?? [], (n) => cfg.limitations[n]),
-			(l) => l && sched.window_active(l, tm));
+		return (lim_cache.by[profile] = filter(map(names, (n) => cfg.limitations[n]),
+			(l) => l && sched.window_active(l, tm)));
 	}
 
 	// Scheduled limitations at login: access window, per-period quotas.
@@ -841,13 +913,30 @@ export function create(opts) {
 	}
 
 	reapply_rates = function() {
+		let tc = (shp && shp != 'nft');
+
+		// One tc process for all sessions, not one per session.
+		if (tc)
+			shp.begin();
+
 		for (let slot, s in sessions)
 			apply_rate(s, true);
+
+		if (tc) {
+			let err = shp.commit();
+			if (err)
+				log('warn', 'Re-applying rate limits: %s', err);
+		}
 	};
 
 	// MikroTik burst: average over burst-time below burst-threshold -> burst
 	// rate allowed, otherwise max-limit. Also picks up rate changes (CoA,
 	// limitation windows opening or closing).
+	function burst_capable(s) {
+		let p = shaper.parse_rate_limit(s.rate_limit);
+		return p && (p.rx.burst_rate > p.rx.rate || p.tx.burst_rate > p.tx.rate);
+	}
+
 	function shape_poll(s, now) {
 		let p = shaper.parse_rate_limit(s.rate_limit);
 
@@ -1005,7 +1094,7 @@ export function create(opts) {
 				upd.expires = now + user.validity;
 
 			users.set_internal(username, upd);
-			users.save(true);
+			save_users_soon();
 
 			if (user.batch || user.price)
 				records.add_sale({ time: now, user: username, batch: user.batch ?? '', price: user.price ?? '', profile: user.profile });
@@ -1143,7 +1232,7 @@ export function create(opts) {
 		if (!mac)
 			return fail('no-host', 'unknown client (no neighbor entry)');
 
-		let h = hosts.get(mac);
+		let h = hosts.find(mac);
 		let server = h?.server;
 
 		if (!server)
@@ -1337,7 +1426,7 @@ export function create(opts) {
 		let cmds = [];
 
 		// Final counter read so the last seconds of traffic are billed.
-		let kc = nft.read_counters();
+		let kc = nft.read_counters(map(list, (item) => item[0]));
 
 		for (let item in list) {
 			let s = sessions[item[0]];
@@ -1400,6 +1489,7 @@ export function create(opts) {
 	/* ---------- periodic work ---------- */
 
 	self.poll = function() {
+		let t0 = ms();
 		let kc = nft.read_counters();
 
 		if (kc == null || need_rebuild) {
@@ -1409,6 +1499,10 @@ export function create(opts) {
 		}
 
 		let now = time();
+		let rates_due = (now - last_rates >= 30);
+
+		if (rates_due)
+			last_rates = now;
 		let expired = [];
 
 		for (let slot, s in sessions) {
@@ -1430,7 +1524,10 @@ export function create(opts) {
 				s.next_interim = now + s.interim;
 			}
 
-			shape_poll(s, now);
+			// Burst needs the average every poll; other limits only change on
+			// CoA (applied at once) or when a limitation window opens/closes.
+			if (rates_due || s.bursting?.rx === false || s.bursting?.tx === false || burst_capable(s))
+				shape_poll(s, now);
 
 			let t = totals(s);
 			let l = s.limits;
@@ -1454,8 +1551,15 @@ export function create(opts) {
 
 		if (length(expired))
 			self.logout_many(expired);
-		else
-			checkpoint();
+		else if (now - last_checkpoint >= 60)
+			checkpoint();	// counter progress; the kernel keeps the counters anyway
+
+		// Neighbor events get lost in bursts (an AP coming back with hundreds
+		// of clients): re-read the kernel table every 30 s.
+		if (now - last_resync >= 30) {
+			last_resync = now;
+			hosts.resync();
+		}
 
 		// Interfaces re-created by netifd lose their qdiscs: rebuild then.
 		if (shp && shp != 'nft' && (++polls % 6) == 0) {
@@ -1470,11 +1574,15 @@ export function create(opts) {
 		}
 
 		// Forget unauthorized hosts after the server's idle-timeout.
-		hosts.prune((server) => cfg.servers[server]?.idle_timeout ?? 0, (mac) => !!by_mac[mac]);
+		if (rates_due)
+			hosts.prune((server) => cfg.servers[server]?.idle_timeout ?? 0, (mac) => !!by_mac[mac]);
 
 		for (let mac, c in chap)
 			if (c.expires < now)
 				delete chap[mac];
+
+		perf.poll_ms = ms() - t0;
+		perf.poll_max_ms = max(perf.poll_max_ms, perf.poll_ms);
 	};
 
 	self.sync_db = function() {
@@ -1500,7 +1608,8 @@ export function create(opts) {
 		let kc = nft.read_counters();
 
 		for (let s in st.sessions ?? []) {
-			if (!s.slot || !normalize_mac(s.mac))
+			// One session per MAC, whatever an older checkpoint says.
+			if (!s.slot || !normalize_mac(s.mac) || by_mac[s.mac])
 				continue;
 
 			if (kc?.[s.slot])
@@ -1532,9 +1641,11 @@ export function create(opts) {
 				if (slot)
 					sessions[slot].last_seen = time();
 			},
-			// A device we have a MAC cookie for showed up again.
+			// A device we have a MAC cookie for showed up again. Not before
+			// start-up is done: the first neighbor dump runs before the saved
+			// sessions are restored, and would log everybody in twice.
 			on_update: (h) => {
-				if (!by_mac[h.mac])
+				if (started && !by_mac[h.mac])
 					auto_login(h.mac);
 			},
 		});
@@ -1549,6 +1660,8 @@ export function create(opts) {
 		setup_shaper();
 		reapply_rates();
 
+		started = true;
+
 		if (opts?.no_netlink != true)
 			hosts.start();
 
@@ -1558,13 +1671,16 @@ export function create(opts) {
 	// On a clean stop we keep sessions (and the table) so clients stay online
 	// across restarts and upgrades; `flush` removes everything.
 	self.stop = function() {
-		checkpoint();
+		checkpoint_now();
 		users.save(true);
 		save_cookies(true);
 		records.save(true);
 	};
 
 	self.flush = function() {
+		// No automatic (MAC / MAC-cookie) logins until the next reload.
+		started = false;
+
 		let list = map(keys(sessions), (slot) => [ slot, CAUSE.NAS_REBOOT ]);
 		self.logout_many(list);
 		nft.delete_table();

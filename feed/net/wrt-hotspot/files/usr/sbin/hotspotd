@@ -6,7 +6,12 @@ import * as uloop from 'uloop';
 import * as ubus from 'ubus';
 import * as core_mod from 'wrthotspot.core';
 import * as api from 'wrthotspot.api';
+import { writefile } from 'fs';
 import { log } from 'wrthotspot.util';
+
+// Under memory pressure the kernel should pick a portal worker or a tool,
+// not the process that holds every session (found in the load tests).
+writefile('/proc/self/oom_score_adj', '-500');
 
 uloop.init();
 
@@ -39,6 +44,10 @@ poll = uloop.timer(cfg.global.poll_interval * 1000, function() {
 	catch (e) {
 		log('error', 'poll: %s\n%s', e.message, e.stacktrace?.[0]?.context ?? '');
 	}
+
+	// Each poll builds large temporary strings (counter dumps, checkpoint);
+	// collect them now instead of letting the heap grow between cycles.
+	gc('collect');
 
 	poll.set(core.config().global.poll_interval * 1000);
 });
@@ -73,5 +82,8 @@ if (uloop.signal)
 log('info', 'hotspotd %s started', core_mod.VERSION);
 uloop.run();
 
+// Unpublish first: while state is saved, callers (portal, LuCI, a new
+// instance's clients) get "not found" at once instead of a 30 s timeout.
+obj.remove();
 core.stop();
 log('info', 'hotspotd stopped');

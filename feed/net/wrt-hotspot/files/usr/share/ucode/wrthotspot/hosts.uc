@@ -96,6 +96,18 @@ export function create(opts) {
 		}
 	}
 
+	// Kernel dumps on lookup misses, at most once a second: an unknown client
+	// (or a flood of them) must not turn every request into a full dump.
+	let last_dump = 0;
+
+	function dump_limited() {
+		if (time() - last_dump < 1)
+			return;
+
+		last_dump = time();
+		dump();
+	}
+
 	let self;
 
 	self = {
@@ -129,18 +141,31 @@ export function create(opts) {
 		mac_of: function(ip) {
 			ip = normalize_ip(ip);
 
-			if (!ip2mac[ip]) {
-				// The neighbor entry may be newer than our last event; ask the kernel.
-				let res = rtnl.request(C.RTM_GETNEIGH, C.NLM_F_DUMP, { family: (ip_family(ip) == 6) ? C.AF_INET6 : C.AF_INET });
-
-				for (let m in (type(res) == 'array') ? res : [])
-					handle(m, false);
-			}
+			// The neighbor entry may be newer than our last event; ask the kernel.
+			if (!ip2mac[ip])
+				dump_limited();
 
 			return ip2mac[ip];
 		},
 
 		get: function(mac) { return hosts[mac]; },
+
+		count: () => length(keys(hosts)),
+
+		// Like get(), but asks the kernel when the MAC is unknown: neighbor
+		// events can be lost when hundreds arrive at once (netlink buffer).
+		find: function(mac) {
+			if (!hosts[mac])
+				dump_limited();
+
+			return hosts[mac];
+		},
+
+		// Full re-read of the kernel neighbor table (heals lost events).
+		resync: function() {
+			last_dump = time();
+			dump();
+		},
 
 		// Make sure a MAC we know about from elsewhere (e.g. a restored session) exists.
 		touch: function(mac, dev) {

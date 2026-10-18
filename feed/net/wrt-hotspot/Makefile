@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wrt-hotspot
-PKG_VERSION:=0.4.0
+PKG_VERSION:=0.7.0
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_MAINTAINER:=Usama Khan
@@ -56,6 +56,8 @@ define Package/wrt-hotspot/install
 	$(INSTALL_DIR) $(1)/etc/config $(1)/etc/init.d $(1)/usr/sbin
 	$(INSTALL_CONF) ./files/etc/config/wrthotspot $(1)/etc/config/wrthotspot
 	$(INSTALL_BIN) ./files/etc/init.d/wrthotspot $(1)/etc/init.d/wrthotspot
+	$(INSTALL_DIR) $(1)/etc/sysctl.d
+	$(INSTALL_DATA) ./files/etc/sysctl.d/12-wrthotspot.conf $(1)/etc/sysctl.d/
 	$(INSTALL_BIN) ./files/usr/sbin/hotspotd $(1)/usr/sbin/hotspotd
 	$(INSTALL_BIN) ./files/usr/sbin/wrthotspot $(1)/usr/sbin/wrthotspot
 	$(INSTALL_DIR) $(1)/usr/share/ucode/wrthotspot

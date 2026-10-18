@@ -132,6 +132,16 @@ export function run_checks(cfg, state) {
 			add('acct_backlog', 'warn', `${state.radius_backlog} accounting request(s) waiting for a RADIUS server`);
 	}
 
+	// Kernel tables that bound how many clients the router can carry.
+	let num = (path) => int(trim(fs.readfile(path) ?? '0'));
+	let ct_max = num('/proc/sys/net/netfilter/nf_conntrack_max'), ct_cnt = num('/proc/sys/net/netfilter/nf_conntrack_count');
+	let n6 = num('/proc/sys/net/ipv6/neigh/default/gc_thresh3'), n4 = num('/proc/sys/net/ipv4/neigh/default/gc_thresh3');
+
+	add('conntrack', (ct_max && ct_cnt > ct_max * 0.8) ? 'warn' : 'info',
+		`Connection tracking: ${ct_cnt} of ${ct_max} entries in use (each client needs dozens)`);
+	add('neigh', (n6 < 4096 || n4 < 2048) ? 'warn' : 'ok',
+		`Neighbor table limits: IPv4 ${n4}, IPv6 ${n6} entries` + ((n6 < 4096) ? ' - too small for many IPv6 clients (see /etc/sysctl.d/12-wrthotspot.conf)' : ''));
+
 	let tz = fs.readfile('/etc/TZ');
 	add('timezone', 'info', `Time zone ${trim(tz ?? 'UTC')} (used by scheduled limitations)`);
 

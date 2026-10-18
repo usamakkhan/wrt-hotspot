@@ -370,27 +370,43 @@ export function table_exists() {
 };
 
 // { slot: { up_bytes, up_packets, down_bytes, down_packets } } or null if the table is gone.
-export function read_counters() {
-	let res = run(`nft -j list counters table ${TABLE}`);
+// With `slots`, only those sessions' counters are read (a logout must not
+// cost a dump of every counter); large sets still use one full dump.
+export function read_counters(slots) {
+	let partial = slots && length(slots) <= 8;
+	let cmd = partial
+		? join('; ', map(slots, (s) => `nft -j list counter ${TABLE} cu_${s}; nft -j list counter ${TABLE} cd_${s}`))
+		: `nft -j list counters table ${TABLE}`;
+	let res = run(cmd);
 
-	if (res.code != 0)
+	if (!partial && res.code != 0)
 		return null;
 
-	let data;
-	try { data = json(res.out); } catch (e) { return null; }
+	// One JSON document per nft invocation, one per line.
+	let items = [];
+	for (let line in split(res.out ?? '', '
+')) {
+		if (substr(line, 0, 1) != '{')
+			continue;
+
+		try { push(items, ...(json(line)?.nftables ?? [])); } catch (e) { }
+	}
 
 	let out = {};
 
-	for (let item in data?.nftables ?? []) {
+	// Names are cu_<slot> / cd_<slot>; plain slicing is much cheaper than a
+	// regex when there are thousands of them.
+	for (let item in items) {
 		let c = item.counter;
-		let m = c ? match(c.name, /^c([ud])_(\d+)$/) : null;
+		let name = c?.name;
 
-		if (!m)
+		if (!name || substr(name, 0, 1) != 'c' || substr(name, 2, 1) != '_')
 			continue;
 
-		let e = (out[m[2]] ??= { up_bytes: 0, up_packets: 0, down_bytes: 0, down_packets: 0 });
+		let dir = substr(name, 1, 1), slot = substr(name, 3);
+		let e = (out[slot] ??= { up_bytes: 0, up_packets: 0, down_bytes: 0, down_packets: 0 });
 
-		if (m[1] == 'u') {
+		if (dir == 'u') {
 			e.up_bytes = c.bytes;
 			e.up_packets = c.packets;
 		}

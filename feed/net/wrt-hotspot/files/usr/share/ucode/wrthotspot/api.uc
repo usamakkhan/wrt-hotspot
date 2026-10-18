@@ -17,6 +17,23 @@ const USER_ARGS = {
 	validity: '', expires: '', price: '', batch: '',
 };
 
+// Lists are paged: a ubus message is limited to 1 MiB, which a few thousand
+// sessions or vouchers would exceed. limit 0 = the default page size.
+const PAGE_ARGS = { offset: 0, limit: 0, search: '' };
+const PAGE_MAX = 1000;
+
+function page(list, a, text) {
+	let q = lc(a.search ?? '');
+
+	if (q != '')
+		list = filter(list, (x) => index(lc(text(x)), q) >= 0);
+
+	let offset = max(0, a.offset ?? 0);
+	let limit = (a.limit > 0) ? min(a.limit, PAGE_MAX) : PAGE_MAX;
+
+	return { items: slice(list, offset, offset + limit), total: length(list), offset };
+}
+
 export function publish(conn, core) {
 	function err(msg) {
 		return { ok: false, error: msg };
@@ -38,8 +55,8 @@ export function publish(conn, core) {
 				return {
 					version: VERSION,
 					devices: core.devices(),
-					sessions: length(core.sessions()),
-					hosts: length(core.hosts()),
+					sessions: core.session_count(),
+					hosts: core.host_count(),
 					users: core.users().count(),
 					...core.runtime(),
 				};
@@ -113,14 +130,18 @@ export function publish(conn, core) {
 		},
 
 		sessions: {
-			call: function() {
-				return { sessions: core.sessions() };
+			args: PAGE_ARGS,
+			call: function(req) {
+				let p = page(core.sessions(), req.args, (s) => `${s.user} ${s.mac} ${join(' ', s.ipv4)} ${s.id}`);
+				return { sessions: p.items, total: p.total, offset: p.offset };
 			},
 		},
 
 		hosts: {
-			call: function() {
-				return { hosts: core.hosts() };
+			args: PAGE_ARGS,
+			call: function(req) {
+				let p = page(core.hosts(), req.args, (h) => `${h.mac} ${join(' ', h.ipv4)} ${join(' ', h.ipv6)}`);
+				return { hosts: p.items, total: p.total, offset: p.offset };
 			},
 		},
 
@@ -217,7 +238,7 @@ export function publish(conn, core) {
 				let from = a.from || (to - 7 * 86400);
 				let r = core.records().report(from, to, a.group || 'day');
 
-				r.online = length(core.sessions());
+				r.online = core.session_count();
 				return r;
 			},
 		},
@@ -249,8 +270,10 @@ export function publish(conn, core) {
 		},
 
 		user_list: {
-			call: function() {
-				return { users: map(core.users().list(), public_view) };
+			args: PAGE_ARGS,
+			call: function(req) {
+				let p = page(core.users().list(), req.args, (u) => `${u.name} ${u.comment} ${u.batch} ${u.email}`);
+				return { users: map(p.items, public_view), total: p.total, offset: p.offset };
 			},
 		},
 

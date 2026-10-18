@@ -41,10 +41,7 @@ function pair(s, conv) {
 // MikroTik: "rx[/tx] [rx-burst[/tx-burst] [rx-thr[/tx-thr] [rx-time[/tx-time] [prio] [rx-min[/tx-min]]]]]"
 // rx = what the router receives from the client (upload), tx = download.
 // -> { rx: dir, tx: dir } with dir = { rate, burst_rate, burst_threshold, burst_time, priority, min_rate }
-export function parse_rate_limit(s) {
-	if (s == null || trim(`${s}`) == '')
-		return null;
-
+function parse_rate_limit_uncached(s) {
 	let f = split(trim(`${s}`), /[ \t]+/);
 
 	if (length(f) > 6)
@@ -74,6 +71,25 @@ export function parse_rate_limit(s) {
 
 	return { rx: dir(0), tx: dir(1) };
 };
+
+// Parsed limits are cached: every poll asks for every session's limit.
+let parsed = {}, parsed_n = 0;
+
+export function parse_rate_limit(s) {
+	if (s == null || trim(`${s}`) == '')
+		return null;
+
+	if (exists(parsed, s))
+		return parsed[s];
+
+	if (++parsed_n > 256) {
+		parsed = {};
+		parsed_n = 1;
+	}
+
+	return (parsed[s] = parse_rate_limit_uncached(s));
+};
+
 
 // Burst is allowed while the average over the last burst_time seconds is
 // below the threshold (and burst is configured and faster than the rate).
@@ -107,6 +123,8 @@ export function window_avg(samples, window, now) {
 
 /* ---------- tc backend ---------- */
 
+export const LEAF = 'fq_codel flows 64 limit 300 memory_limit 512Kb';
+
 function hx(n) {
 	return sprintf('%x', n);
 }
@@ -125,7 +143,16 @@ export function tc_backend(state_dir) {
 	let devs = {};		// dev -> { ifb, cap }
 	let self;
 
+	// Between begin() and commit() commands are collected and run as one
+	// tc process (re-applying thousands of sessions after a restart).
+	let pending = null;
+
 	function batch(lines) {
+		if (pending != null) {
+			push(pending, ...lines);
+			return null;
+		}
+
 		if (!length(lines))
 			return null;
 
@@ -194,6 +221,16 @@ export function tc_backend(state_dir) {
 
 		devices: () => keys(devs),
 
+		begin: function() {
+			pending = [];
+		},
+
+		commit: function() {
+			let lines = pending ?? [];
+			pending = null;
+			return batch(lines);
+		},
+
 		// limits: parse_rate_limit() result; ceil = { rx, tx } current ceilings.
 		set_session: function(dev, slot, mac, limits, ceil) {
 			let d = devs[dev];
@@ -220,7 +257,11 @@ export function tc_backend(state_dir) {
 
 				// fq_codel leaf: measured through HTB at 512k-20M it delivers ~95%
 				// of the rate as TCP goodput (the header overhead), on v4 and v6.
-				push(lines, `qdisc replace dev ${side[0]} parent 1:${cls} handle ${leaf}: fq_codel`);
+				// Sized for one device: the default 1024 flow slots cost ~70 KiB
+				// of kernel memory per qdisc, which ran a 256 MB router out of
+				// memory at ~900 shaped users; 64 slots and a 300-packet / 512 KiB
+				// queue keep it at a few KiB per user.
+				push(lines, `qdisc replace dev ${side[0]} parent 1:${cls} handle ${leaf}: ${LEAF}`);
 
 				push(lines,
 					`filter replace dev ${side[0]} parent 1: protocol all prio 10 handle 0x${cls} flower ${side[2]} ${mac} classid 1:${cls}`);

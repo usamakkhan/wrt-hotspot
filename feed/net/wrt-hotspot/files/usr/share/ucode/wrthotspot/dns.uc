@@ -20,6 +20,12 @@ let has_nftset = null;
 export function dnsmasq_has_nftset() {
 	if (has_nftset == null) {
 		let out = run('dnsmasq -v').out ?? '';
+
+		// Cache real answers only: a failed run (e.g. no memory to fork)
+		// must not disable the nftset walled garden for the daemon's lifetime.
+		if (!match(out, /Compile time options/))
+			return false;
+
 		has_nftset = !!match(out, / nftset/) && !match(out, /no-nftset/);
 	}
 
