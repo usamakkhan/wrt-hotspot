@@ -76,6 +76,16 @@ cleanup() {
 		for c in $CONFIGS; do cp $BK/$c /etc/config/$c; done
 		rm -rf $BK
 	fi
+
+	# Belt and braces: nothing of the test topology may survive into the next
+	# run's backup (sections referencing hstest/hsinet, by name or by value).
+	for c in network firewall dhcp wrthotspot; do
+		# Reverse order: deleting @type[N] shifts the indexes of later sections.
+		for s in $(uci -q show $c | grep -E "hstest|hsinet|br_hstest|Allow-hstest" | sed -n "s/^$c\.\([^.=]*\).*/\1/p" | sort -u | sort -t[ -k2 -rn); do
+			uci -q delete "$c.$s"
+		done
+		uci commit $c
+	done
 }
 
 teardown() {
@@ -94,6 +104,8 @@ setup() {
 	cleanup
 	mkdir -p $BK
 	for c in $CONFIGS; do cp /etc/config/$c $BK/$c; done
+	# Always start from the package's default hotspot config.
+	cp "$(dirname "$0")/../../feed/net/wrt-hotspot/files/etc/config/wrthotspot" /etc/config/wrthotspot
 
 	uci set network.br_hstest=device
 	uci set network.br_hstest.type=bridge

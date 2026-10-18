@@ -113,11 +113,20 @@ function setup(net) {
 		c.set('firewall', z, 'input', 'REJECT');
 		c.set('firewall', z, 'output', 'ACCEPT');
 		c.set('firewall', z, 'forward', 'REJECT');
+		print(`Created firewall zone "${zone}"\n`);
+	}
 
-		let f = c.add('firewall', 'forwarding');
-		c.set('firewall', f, 'src', zone);
-		c.set('firewall', f, 'dest', 'wan');
-		print(`Created firewall zone "${zone}" with forwarding to wan\n`);
+	// Our own zone must reach the internet, also when re-running setup.
+	if (zone == net) {
+		let fwd = false;
+		c.foreach('firewall', 'forwarding', (f) => { if (f.src == zone && f.dest == 'wan') fwd = true; });
+
+		if (!fwd) {
+			let f = c.add('firewall', 'forwarding');
+			c.set('firewall', f, 'src', zone);
+			c.set('firewall', f, 'dest', 'wan');
+			print(`Added forwarding ${zone} -> wan\n`);
+		}
 	}
 
 	let rules = [
