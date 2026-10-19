@@ -1,6 +1,6 @@
 # WrtHotspot
 
-A MikroTik-Hotspot-class captive portal for OpenWrt 24.10+, with full IPv6 support, RADIUS (incl. CoA),
+A captive portal hotspot for OpenWrt 24.10+, inspired by MikroTik Hotspot, with full IPv6 support, RADIUS (incl. CoA),
 vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 
 Status: **0.8.0 — Phases 1–8 working, qualified on x86**: tested end to end on OpenWrt 25.12.5 x86-64
@@ -8,8 +8,9 @@ against FreeRADIUS 3.2.10 (154 + 53 + 16 + 32 + 16 end-to-end checks), rates mea
 150 simultaneous real clients through the portal, upgrades from 0.7.0 through the signed feed. Packages
 build with the official 24.10 (ipk) and 25.12 (apk) SDKs. Physical MIPS/ARM routers are still to be tested.
 
-- [docs/research.md](docs/research.md) — stack, prior art, dataplane and MikroTik feature research
-- [docs/architecture.md](docs/architecture.md) — architecture, phases and MikroTik parity matrix
+- Source: [github.com/usamakkhan/wrt-hotspot](https://github.com/usamakkhan/wrt-hotspot) ([releases](https://github.com/usamakkhan/wrt-hotspot/releases), [issues](https://github.com/usamakkhan/wrt-hotspot/issues))
+- [docs/research.md](docs/research.md) — stack, prior art, dataplane and feature research
+- [docs/architecture.md](docs/architecture.md) — architecture, phases and feature comparison
 - [docs/qualification.md](docs/qualification.md) — load and traffic tests, capacity tiers
 - [docs/billing-integration.md](docs/billing-integration.md) — SAS4 and other RADIUS / billing systems, RouterOS API
 
@@ -121,6 +122,7 @@ tests/integration/              end-to-end netns test   (sh tests/integration/ne
 On a Linux host with the [SDK prerequisites](https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem):
 
 ```sh
+git clone https://github.com/usamakkhan/wrt-hotspot.git && cd wrt-hotspot
 scripts/build-packages.sh 24.10.8     # -> dist/24.10.8/: *.ipk + Packages (usign-signed) + public key
 scripts/build-packages.sh 25.12.6     # -> dist/25.12.6/: *.apk + packages.adb (signed) + wrthotspot.pem
 ```
@@ -142,19 +144,25 @@ both sets.
 
 ### Install from the feed
 
-Publish `dist/<release>/` on any web server, then on the router:
+The feeds are published as assets of the GitHub release
+([releases](https://github.com/usamakkhan/wrt-hotspot/releases)): upload the files of `dist/24.10.8/`
+and `dist/25.12.6/` (except `index.json`) to the release, e.g. `v0.8.0`. Then on the router:
 
 ```sh
 # 25.12 (apk)
-wget -O /etc/apk/keys/wrthotspot.pem https://example.com/wrthotspot/25.12.6/wrthotspot.pem
-echo https://example.com/wrthotspot/25.12.6/packages.adb >> /etc/apk/repositories.d/customfeeds.list
+wget -O /etc/apk/keys/wrthotspot.pem https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.0/wrthotspot.pem
+echo https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.0/packages.adb >> /etc/apk/repositories.d/customfeeds.list
 apk update && apk add wrt-hotspot-full
 
 # 24.10 (opkg)
-wget -O /tmp/wrthotspot.pub https://example.com/wrthotspot/24.10.8/<key id> && opkg-key add /tmp/wrthotspot.pub
-echo 'src/gz wrthotspot https://example.com/wrthotspot/24.10.8' >> /etc/opkg/customfeeds.conf
+wget -O /tmp/wrthotspot.pub https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.0/dcedbf2d84a0ef59
+opkg-key add /tmp/wrthotspot.pub
+echo 'src/gz wrthotspot https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.0' >> /etc/opkg/customfeeds.conf
 opkg update && opkg install wrt-hotspot-full
 ```
+
+Release downloads only work without a login while the repository is public; for a private
+repository, serve the `dist/<release>/` directory from your own web server instead and use its URL.
 
 Upgrades then come with `apk upgrade` / `opkg upgrade`. Packages that were installed from files
 (0.7.0 and earlier) are pinned to those files: add them once by name from the feed
@@ -176,3 +184,10 @@ wrthotspot user add alice password=secret
 
 The end-to-end test builds its own throwaway topology (network namespaces + a test bridge). Run it only on
 a dedicated test device: it needs `ip-full`, `kmod-veth` and `curl`.
+
+## License and trademarks
+
+GPL-2.0-or-later (see the package Makefiles). WrtHotspot is an independent project inspired by
+MikroTik Hotspot; it is not affiliated with or endorsed by MikroTik. MikroTik and RouterOS are
+trademarks of their owner. Names such as `Mikrotik-Rate-Limit` or "RouterOS API" are used only to
+describe compatibility with existing RADIUS servers, billing systems and page templates.

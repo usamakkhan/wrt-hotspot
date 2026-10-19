@@ -1,4 +1,4 @@
-# Research: building a MikroTik-class hotspot for OpenWrt
+# Research: building a hotspot for OpenWrt inspired by MikroTik Hotspot
 
 Date: 2026-10-17. Four research tracks: runtime stack, prior art, nftables/IPv6 dataplane, MikroTik feature set.
 Items marked **[unverified]** must be tested on hardware before we rely on them.
@@ -88,8 +88,8 @@ No OpenWrt project combines nftables, full IPv6, full RADIUS (with CoA) and real
 ## 5. MikroTik feature catalog
 
 The full property-level catalog (servers, server profiles, users, user profiles, active/host/cookie, ip-binding,
-walled garden, servlet pages and variables, RADIUS attributes and VSAs, CoA, User Manager) is the parity checklist in
-[architecture.md §8](architecture.md#8-mikrotik-parity-matrix).
+walled garden, servlet pages and variables, RADIUS attributes and VSAs, CoA, User Manager) is the feature checklist in
+[architecture.md §8](architecture.md#8-feature-comparison-with-mikrotik-hotspot).
 
 MikroTik gaps we can fill: IPv6; MAC randomization handling; GUI voucher batches and printing; RFC 8908/8910;
 a dual-stack walled garden by domain.

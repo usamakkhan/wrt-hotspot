@@ -5,7 +5,7 @@ Background and sources: [research.md](research.md).
 
 ## 1. Goals
 
-- MikroTik Hotspot + User Manager feature parity (~99%, matrix in §8), **dual-stack IPv4 + IPv6**.
+- Feature set inspired by MikroTik Hotspot + User Manager (comparison in §8), **dual-stack IPv4 + IPv6**.
 - Runs on every OpenWrt router from 8 MB flash / 64 MB RAM MIPS up to x86; one arch-independent package.
 - OpenWrt 24.10 and 25.12 (minimum 24.10: 23.05 lacks ucode-mod-socket/digest needed for RADIUS, and is EOL).
 - Survives firewall reloads, daemon restarts and reboots without dropping logged-in users.
@@ -151,9 +151,9 @@ Users (add, reset, extend, disconnect) · Sessions history · Reports. Mobile-fr
 | 8 ✓ | Optional RADIUS package, capacity tiers, third-party RADIUS presets + RouterOS API, transparent HTTP proxy, signed feeds, upgrade tests, i18n template |
 | 7 (x86 ✓) | Hardware qualification: x86 done (2000-session load test, 150 real concurrent clients, see [qualification.md](qualification.md)); MIPS 24Kc, MT7621, IPQ40xx and real Wi-Fi clients pending hardware |
 
-## 8. MikroTik parity matrix
+## 8. Feature comparison with MikroTik Hotspot
 
-| Area | MikroTik feature | Plan |
+| Area | Feature (as named in MikroTik Hotspot) | WrtHotspot |
 |---|---|---|
 | Server | per-interface servers, address-pool, idle/keepalive/login timeouts, addresses-per-mac | ✓ (per interface/VLAN) |
 | Server | any-IP / universal client (1:1 NAT) | ✓ IPv4 only; IPv6 not needed |

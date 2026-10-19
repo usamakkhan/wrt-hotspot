@@ -1,8 +1,9 @@
 include $(TOPDIR)/rules.mk
 
-LUCI_TITLE:=LuCI support for WrtHotspot (MikroTik-class captive portal)
+LUCI_TITLE:=LuCI support for WrtHotspot (captive portal hotspot)
 LUCI_DEPENDS:=+wrt-hotspot +luci-base
 LUCI_PKGARCH:=all
+LUCI_URL:=https://github.com/usamakkhan/wrt-hotspot
 
 PKG_VERSION:=0.8.0
 PKG_RELEASE:=1

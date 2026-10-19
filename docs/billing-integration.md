@@ -1,7 +1,7 @@
 # Third-party RADIUS and billing systems
 
-WrtHotspot talks to RADIUS servers and ISP billing systems the way a MikroTik hotspot does, so
-systems built for RouterOS can manage it. All of this lives in the optional `wrt-hotspot-radius`
+WrtHotspot speaks the RADIUS attributes and API that billing systems written for MikroTik routers
+expect, so those systems can manage it too. All of this lives in the optional `wrt-hotspot-radius`
 package; without it the hotspot runs on local users only (see [Small routers](#small-routers-without-radius)).
 
 ## Presets

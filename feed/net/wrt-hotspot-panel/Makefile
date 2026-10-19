@@ -14,6 +14,7 @@ define Package/wrt-hotspot-panel
   SUBMENU:=Captive Portals
   TITLE:=Operator panel for wrt-hotspot (vouchers, users, reports)
   PKGARCH:=all
+  URL:=https://github.com/usamakkhan/wrt-hotspot
   DEPENDS:=+wrt-hotspot +rpcd +uhttpd +uhttpd-mod-ubus
 endef
 

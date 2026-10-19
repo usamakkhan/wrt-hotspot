@@ -12,8 +12,9 @@ define Package/wrt-hotspot
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=Captive Portals
-  TITLE:=MikroTik-class captive portal hotspot with IPv6
+  TITLE:=Captive portal hotspot with IPv6 (inspired by MikroTik Hotspot)
   PKGARCH:=all
+  URL:=https://github.com/usamakkhan/wrt-hotspot
   DEPENDS:=+ucode +ucode-mod-fs +ucode-mod-uci +ucode-mod-ubus +ucode-mod-uloop \
 	+ucode-mod-rtnl +ucode-mod-digest \
 	+uhttpd +uhttpd-mod-ucode \
@@ -21,7 +22,7 @@ define Package/wrt-hotspot
 endef
 
 define Package/wrt-hotspot/description
-  Captive portal hotspot for OpenWrt modelled on MikroTik Hotspot: local users,
+  Captive portal hotspot for OpenWrt, inspired by MikroTik Hotspot: local users,
   trial, MAC, cookie and CHAP/PAP/HTTPS logins, RADIUS with CoA, walled garden,
   per-user limits, scheduled limitations, accounting, MikroTik compatible login
   pages, and full dual-stack (IPv4 + IPv6) client handling. Without the
@@ -41,6 +42,7 @@ define Package/wrt-hotspot-shaper
   SUBMENU:=Captive Portals
   TITLE:=Per-user traffic shaping (tc HTB) for wrt-hotspot
   PKGARCH:=all
+  URL:=https://github.com/usamakkhan/wrt-hotspot
   DEPENDS:=+wrt-hotspot +tc-full +kmod-sched-core +kmod-sched +kmod-sched-flower +kmod-ifb
 endef
 
@@ -58,6 +60,7 @@ define Package/wrt-hotspot-radius
   SUBMENU:=Captive Portals
   TITLE:=RADIUS and billing-system integration for wrt-hotspot
   PKGARCH:=all
+  URL:=https://github.com/usamakkhan/wrt-hotspot
   DEPENDS:=+wrt-hotspot +ucode-mod-socket +ucode-mod-struct
   # radius.uc is loaded by the core: only the matching core version works.
   EXTRA_DEPENDS:=wrt-hotspot (=$(PKG_VERSION)-r$(PKG_RELEASE))
@@ -77,6 +80,7 @@ define Package/wrt-hotspot-full
   SUBMENU:=Captive Portals
   TITLE:=WrtHotspot with all features
   PKGARCH:=all
+  URL:=https://github.com/usamakkhan/wrt-hotspot
   DEPENDS:=+wrt-hotspot +wrt-hotspot-radius +wrt-hotspot-shaper +wrt-hotspot-panel +luci-app-wrt-hotspot
 endef
 
