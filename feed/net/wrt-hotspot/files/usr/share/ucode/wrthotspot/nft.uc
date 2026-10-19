@@ -240,6 +240,21 @@ export function ruleset(state) {
 	r += `\tchain dstnat {\n`;
 	r += `\t\ttype nat hook prerouting priority dstnat - 5; policy accept;\n`;
 	r += `\t\tiifname != @hs_ifaces return\n`;
+
+	// Transparent HTTP proxy for logged-in clients (MikroTik transparent-proxy):
+	// a proxy on the router (redirect, both families) or another host (dnat,
+	// its own family only). Traffic to the router or the proxy is left alone.
+	for (let p in state.proxies ?? []) {
+		let m = `iifname ${q(p.dev)} ether saddr @auth_mac tcp dport 80 fib daddr type != local`;
+
+		if (p.local)
+			r += `\t\t${m} redirect to :${p.port}\n`;
+		else if (p.family == 6)
+			r += `\t\t${m} ip6 daddr != ${p.address} dnat ip6 to [${p.address}]:${p.port}\n`;
+		else
+			r += `\t\t${m} ip daddr != ${p.address} dnat ip to ${p.address}:${p.port}\n`;
+	}
+
 	r += `\t\tether saddr @auth_mac return\n`;
 	r += `\t\tjump bypassed\n`;
 	r += `\t\tfib daddr type local return\n`;

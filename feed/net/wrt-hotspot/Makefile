@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wrt-hotspot
-PKG_VERSION:=0.7.0
+PKG_VERSION:=0.8.0
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_MAINTAINER:=Usama Khan
@@ -59,6 +59,8 @@ define Package/wrt-hotspot-radius
   TITLE:=RADIUS and billing-system integration for wrt-hotspot
   PKGARCH:=all
   DEPENDS:=+wrt-hotspot +ucode-mod-socket +ucode-mod-struct
+  # radius.uc is loaded by the core: only the matching core version works.
+  EXTRA_DEPENDS:=wrt-hotspot (=$(PKG_VERSION)-r$(PKG_RELEASE))
 endef
 
 define Package/wrt-hotspot-radius/description

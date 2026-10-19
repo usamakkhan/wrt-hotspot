@@ -83,6 +83,24 @@ export function run_checks(cfg, state) {
 		add(`dhcp:${name}`, dhcp ? 'ok' : 'warn',
 			dhcp ? `Server ${name}: DHCP is served on ${srv.interface}` : `Server ${name}: no DHCP on ${srv.interface}; clients need addresses`,
 			dhcp ? null : `setup:${srv.interface}`);
+
+		// Transparent proxy on the router: its port must be open like the portal,
+		// and something must listen there.
+		let sp = cfg.server_profiles[srv.profile] ?? cfg.server_profiles.default;
+		if (sp?.transparent_proxy && sp.http_proxy?.local) {
+			let pp = sp.http_proxy.port, open = false;
+
+			c.foreach('firewall', 'rule', (r) => {
+				if (r.src == zone && index(split(`${r.dest_port ?? ''}`, ' '), `${pp}`) >= 0)
+					open = true;
+			});
+
+			add(`proxy:${name}`, (open && listening(pp)) ? 'ok' : 'error',
+				!open ? `Server ${name}: transparent proxy port ${pp} is not open for zone ${zone ?? '?'}`
+				: !listening(pp) ? `Server ${name}: transparent proxy enabled but nothing listens on port ${pp} (e.g. squid with "http_port ${pp} intercept")`
+				: `Server ${name}: transparent HTTP proxy on port ${pp}`,
+				open ? null : `setup:${srv.interface}`);
+		}
 	}
 
 	let portal = listening(cfg.global.portal_port);

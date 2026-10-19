@@ -2,8 +2,11 @@
 # Build the WrtHotspot packages with the official OpenWrt SDK.
 #
 #   scripts/build-packages.sh <release> [work-dir]
-#   e.g. scripts/build-packages.sh 24.10.4      -> dist/24.10.4/*.ipk
-#        scripts/build-packages.sh 25.12.5      -> dist/25.12.5/*.apk
+#   e.g. scripts/build-packages.sh 24.10.8      -> dist/24.10.8/ (*.ipk + signed Packages)
+#        scripts/build-packages.sh 25.12.6      -> dist/25.12.6/ (*.apk + signed packages.adb)
+#
+# dist/<release>/ is a complete package feed: serve it over HTTP(S) and add it
+# on the router together with the public key that is copied next to it.
 #
 # All packages are architecture independent (ucode, JS, HTML), so the x86-64
 # SDK builds packages that install on every target of that release.
@@ -14,6 +17,8 @@ set -eu
 RELEASE=${1:?usage: $0 <release> [work-dir]}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 WORK=${2:-$REPO/build}
+# Feed signing keys (created on first use; keep them, publish only the .pub/.pem).
+KEYS=${WRTHOTSPOT_KEYS:-$HOME/.wrthotspot-keys}
 BASE="https://downloads.openwrt.org/releases/$RELEASE/targets/x86/64"
 OUT="$REPO/dist/$RELEASE"
 
@@ -77,6 +82,36 @@ for p in wrt-hotspot wrt-hotspot-panel luci-app-wrt-hotspot; do
 	build "$p" "package/$p/compile" NO_DEPS=1
 done
 
-find bin/packages -path '*wrthotspot*' \( -name '*.ipk' -o -name '*.apk' \) -exec cp {} "$OUT/" \;
-echo "== packages in $OUT"
+# Signed feed: one project key per index format, kept outside the SDK so
+# that every build (and every release) is signed by the same key.
+echo "== signed feed"
+mkdir -p "$KEYS"
+if [ -x staging_dir/host/bin/apk ] && grep -q mkndx package/Makefile; then
+	# 25.12+: apk index signed with an EC key.
+	[ -f "$KEYS/apk-private.pem" ] || {
+		openssl ecparam -name prime256v1 -genkey -noout -out "$KEYS/apk-private.pem"
+		openssl ec -in "$KEYS/apk-private.pem" -pubout -out "$KEYS/apk-public.pem" 2>/dev/null
+		echo "   new apk signing key in $KEYS"
+	}
+	cp "$KEYS/apk-private.pem" private-key.pem
+	cp "$KEYS/apk-public.pem" public-key.pem
+	PUB="$KEYS/apk-public.pem"; PUBNAME=wrthotspot.pem
+else
+	# 24.10: opkg index signed with usign.
+	[ -f "$KEYS/usign.key" ] || {
+		staging_dir/host/bin/usign -G -s "$KEYS/usign.key" -p "$KEYS/usign.pub" -c "WrtHotspot feed"
+		echo "   new usign signing key in $KEYS"
+	}
+	cp "$KEYS/usign.key" key-build
+	cp "$KEYS/usign.pub" key-build.pub
+	PUB="$KEYS/usign.pub"; PUBNAME=$(staging_dir/host/bin/usign -F -p "$KEYS/usign.pub")
+fi
+
+build index package/index CONFIG_SIGNED_PACKAGES=y
+
+FEED=$(dirname "$(find bin/packages -path '*/wrthotspot/*' \( -name '*.ipk' -o -name '*.apk' \) | head -1)")
+cp "$FEED"/* "$OUT/"
+cp "$PUB" "$OUT/$PUBNAME"
+
+echo "== feed in $OUT (public key: $PUBNAME)"
 ls -l "$OUT"

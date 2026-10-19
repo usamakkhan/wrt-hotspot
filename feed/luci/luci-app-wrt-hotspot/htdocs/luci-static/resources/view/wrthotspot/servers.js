@@ -120,6 +120,21 @@ return view.extend({
 		o.placeholder = '/usr/share/wrthotspot/pages/default';
 		o.modalonly = true;
 
+		o = s.taboption('general', form.Flag, 'transparent_proxy', _('Transparent HTTP proxy'),
+			_('Plain HTTP of logged-in clients goes through a proxy (MikroTik transparent-proxy). The proxy must accept intercepted traffic, e.g. squid with <code>http_port 3128 intercept</code>.'));
+		o.modalonly = true;
+
+		o = s.taboption('general', form.Value, 'http_proxy', _('HTTP proxy'),
+			_('Empty or <code>:port</code> = a proxy on this router (port 3128 by default); <code>address:port</code> or <code>[IPv6]:port</code> = another host, used for that address family only.'));
+		o.placeholder = ':3128';
+		o.depends('transparent_proxy', '1');
+		o.modalonly = true;
+		o.validate = function(section_id, value) {
+			if (!value || /^(\[[0-9A-Fa-f:.]+\]|[0-9.]*):[0-9]{1,5}$/.test(value))
+				return true;
+			return _('Use :port, address:port or [IPv6]:port');
+		};
+
 		o = s.taboption('general', form.Flag, 'split_user_domain', _('Split user domain'),
 			_('Strip user@domain / domain\\user to the user part.'));
 		o.modalonly = true;

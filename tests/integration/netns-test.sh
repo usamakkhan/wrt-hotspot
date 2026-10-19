@@ -306,6 +306,44 @@ check "table rebuilt after deletion" nft list table inet wrthotspot
 check "session survives table deletion" online4
 check "walled garden host refilled after rebuild" sh -c "nft list set inet wrthotspot wgh4_4 | grep -q 10.98.0.4"
 
+echo "== transparent HTTP proxy"
+# Stand-in proxies: answer /x with a marker, so the client sees which way it went.
+mkdir -p /tmp/hsproxy-local /tmp/hsproxy-remote
+echo via-local-proxy > /tmp/hsproxy-local/x
+echo via-remote-proxy > /tmp/hsproxy-remote/x
+uhttpd -f -p 0.0.0.0:3128 -p '[::]:3128' -h /tmp/hsproxy-local & lp=$!
+ip netns exec hsinet uhttpd -f -p 10.98.0.5:3128 -h /tmp/hsproxy-remote & rp=$!
+sleep 1
+via() { ccurl "$1" | grep -q "$2"; }
+check_not "no proxy by default" via http://10.98.0.2/x via-
+uci set wrthotspot.@server_profile[0].transparent_proxy=1
+uci commit wrthotspot
+reload_hs
+check "diagnostics: proxy port not open yet" sh -c "wrthotspot check | grep -q 'proxy port 3128 is not open'"
+wrthotspot setup hstest >/dev/null
+/etc/init.d/firewall reload >/dev/null 2>&1
+sleep 1
+check "setup opens the proxy port" sh -c "uci show firewall | grep -q \"Allow-hstest-Proxy\""
+check "diagnostics: proxy ok" sh -c "wrthotspot check | grep -q 'transparent HTTP proxy on port 3128'"
+check "local proxy: IPv4 HTTP redirected" via http://10.98.0.2/x via-local-proxy
+check "local proxy: IPv6 HTTP redirected" via 'http://[fd98::2]/x' via-local-proxy
+check "local proxy: portal itself not proxied" page_has "$P/status" alice
+uci set wrthotspot.@server_profile[0].http_proxy=10.98.0.5:3128
+uci commit wrthotspot
+reload_hs
+check "remote proxy: IPv4 HTTP sent to 10.98.0.5:3128" via http://10.98.0.2/x via-remote-proxy
+check_not "remote IPv4 proxy leaves IPv6 alone" via 'http://[fd98::2]/x' via-
+uci -q delete wrthotspot.@server_profile[0].transparent_proxy
+uci -q delete wrthotspot.@server_profile[0].http_proxy
+uci commit wrthotspot
+reload_hs
+check_not "proxy off again" via http://10.98.0.2/x via-
+wrthotspot setup hstest >/dev/null
+/etc/init.d/firewall reload >/dev/null 2>&1
+check_not "setup removes the proxy rule again" sh -c "uci show firewall | grep -q \"Allow-hstest-Proxy\""
+kill $lp $rp 2>/dev/null
+rm -rf /tmp/hsproxy-local /tmp/hsproxy-remote
+
 echo "== logout"
 check "portal logout" sh -c "ip netns exec hsclient curl -s -m 5 -X POST $P/logout | grep -q 'logged out'"
 check_not "IPv4 blocked again" online4

@@ -59,7 +59,7 @@ function load_rosapi() {
 	}
 }
 
-export const VERSION = '0.7.0';
+export const VERSION = '0.8.0';
 
 // MikroTik / RADIUS terminate causes.
 export const CAUSE = {
@@ -568,9 +568,18 @@ export function create(opts) {
 			s.k = { up_bytes: 0, up_packets: 0, down_bytes: 0, down_packets: 0 };
 		}
 
+		// Transparent HTTP proxy for logged-in clients, per hotspot interface.
+		let proxies = [];
+		for (let dev, srv in devices) {
+			let sp = server_profile_of(srv);
+			if (sp.transparent_proxy && sp.http_proxy)
+				push(proxies, { dev, ...sp.http_proxy });
+		}
+
 		let text = nft.ruleset({
 			ifaces: keys(devices),
 			devices,
+			proxies,
 			port: cfg.global.portal_port,
 			sessions: map(values(sessions), (s) => ({ slot: s.slot, mac: s.mac, lim: s.nft_lim })),
 			bindings: cfg.ip_bindings,

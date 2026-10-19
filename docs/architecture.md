@@ -148,6 +148,7 @@ Users (add, reset, extend, disconnect) · Sessions history · Reports. Mobile-fr
 | 4 ✓ | Shaping (nft limits, then HTB), quotas, scheduled limitations |
 | 5 ✓ | LuCI app |
 | 6 ✓ | Operator panel, vouchers, printing, reports |
+| 8 ✓ | Optional RADIUS package, capacity tiers, third-party RADIUS presets + RouterOS API, transparent HTTP proxy, signed feeds, upgrade tests, i18n template |
 | 7 (x86 ✓) | Hardware qualification: x86 done (2000-session load test, 150 real concurrent clients, see [qualification.md](qualification.md)); MIPS 24Kc, MT7621, IPQ40xx and real Wi-Fi clients pending hardware |
 
 ## 8. MikroTik parity matrix
@@ -161,7 +162,7 @@ Users (add, reset, extend, disconnect) · Sessions history · Reports. Mobile-fr
 | Server profile | mac-auth-password, trial-uptime limit/reset, trial-user-profile, split-user-domain | ✓ |
 | Server profile | smtp-server redirect | ✓ |
 | Server profile | https-redirect | ✓ (default: reject 443, RFC 8908) |
-| Server profile | http-proxy / transparent-proxy | ✗ deferred (no proxy in OpenWrt base) |
+| Server profile | http-proxy / transparent-proxy | ✓ proxy on the router (redirect, IPv4 + IPv6) or another host (dnat) |
 | Server profile | RADIUS options, interim update, location, MAC format, nas-port-type | ✓ |
 | User | name/password, otp-secret, profile, server, mac lock, address, routes | ✓ (routes: deferred) |
 | User | limit-uptime, limit-bytes-in/out/total, counters | ✓ |
@@ -175,8 +176,9 @@ Users (add, reset, extend, disconnect) · Sessions history · Reports. Mobile-fr
 | Access | ip-binding regular/bypassed/blocked, walled garden HTTP + IP | ✓ (domain + dual stack) |
 | Access | walled garden by path/method | ✓ for HTTP only (HTTPS path not visible) |
 | Pages | all servlet pages, variables, conditionals, languages, api.json, external login | ✓ |
-| RADIUS | auth PAP/CHAP, accounting, interim, failover, CoA/Disconnect, MikroTik/WISPr/Ascend VSAs | ✓ |
+| RADIUS | auth PAP/CHAP, accounting, interim, failover, CoA/Disconnect, MikroTik/WISPr/Ascend VSAs | ✓ (+ ChilliSpot VSAs, presets for SAS4 / Radius Manager / RADIUSdesk) |
+| API | RouterOS API for billing systems | ✓ subset: hotspot active/host/user/profile, queues, system info (tcp/8728) |
 | RADIUS | RadSec | deferred |
 | User Manager | users, groups, profiles, limitations with time windows, vouchers, batch, templates, sessions, reports | ✓ in operator panel |
 | User Manager | PayPal payments, EAP for 802.1X | ✗ out of scope (hook for payment plugin later) |
-| **Beyond MikroTik** | IPv6 hotspot, RFC 8908/8910, MAC-randomization handling, GUI voucher printing, dual-stack domain walled garden | ✓ |
+| **Beyond MikroTik** | IPv6 hotspot, RFC 8908/8910, MAC-randomization handling, GUI voucher printing, dual-stack domain walled garden, RAM/flash-based capacity tiers, RADIUS-less build for small routers, signed package feed | ✓ |

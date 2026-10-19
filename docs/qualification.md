@@ -20,14 +20,18 @@ package feeds.
 CI (`.github/workflows/ci.yml`) runs the unit tests inside the OpenWrt 24.10 and 25.12 rootfs images
 (the real ucode and nft of each release), lints shell/JSON/JS, and builds both package sets.
 
-## Test suites (on the VM, after all Phase 7 changes)
+## Test suites (on the VM, 0.8.0)
 
 | Suite | Result |
 |---|---|
-| `tests/run-unit.sh` (incl. `nft -c` of the generated ruleset) | all passed |
-| `tests/integration/netns-test.sh` (portal, IPv4/IPv6, walled garden, RADIUS, CoA, shaping, RFC 8908/8910) | 137 / 137 |
-| `tests/integration/panel-api-test.sh` (operator roles, vouchers, history, reports) | 48 / 48 |
+| `tests/run-unit.sh` (incl. capacity maths and `nft -c` of the generated ruleset) | all passed |
+| `tests/integration/netns-test.sh` (portal, IPv4/IPv6, walled garden, RADIUS + presets + ChilliSpot/Ascend, CoA, shaping, transparent proxy, RFC 8908/8910) | 154 / 154 |
+| `tests/integration/panel-api-test.sh` (operator roles, vouchers, history, reports, capacity force) | 53 / 53 |
+| `tests/integration/capacity-test.sh` (limits, admin force, override) | 16 / 16 |
+| `tests/integration/rosapi-test.uc` (RouterOS API) + `rosapi-librouteros.py` (independent client) | 32 / 32, 11 / 11 |
+| `tests/integration/upgrade-test.sh` (0.7.0 → 0.8.0 through the signed feed) | 16 / 16 |
 | `tests/integration/traffic-test.sh 150` (below) | 9 / 9 |
+| `tests/integration/load-test.uc 2000` (capacity limits off for the run) | 2000 / 2000 logins |
 
 ## Real-traffic concurrency test
 
@@ -94,16 +98,41 @@ That's the worst case: every session gets two HTB classes, two flower filters an
 | 30 s restart | old ubus object stayed registered during shutdown → removed first |
 | Poll 1.25 s at 2000 sessions | parse caches, per-second limitation cache, rate/prune work every 30 s → 0.67 s |
 
-## Capacity guidance
+## Capacity tiers (0.8.0)
 
-| Router class | RAM | Suggested ceiling | Notes |
+The router now computes its own limits (`capacity.uc`) instead of relying on a table like the one
+that used to be here. Costs measured with `tests/integration/capacity-probe.uc 1000` on 25.12:
+
+| Item | RAM per item | of which daemon |
+|---|---|---|
+| local user account | 4.4 KiB | 3 KiB (+ ~0.45 KiB in `users.json` on flash) |
+| learned host | 5 KiB | 2 KiB |
+| session, nft policing / no limit | 18 KiB | 8 KiB |
+| session, tc HTB shaping | 37 KiB | 3 KiB |
+
+Model: budget = available memory at start + what the hotspot already uses − reserve; 85% of it goes
+to sessions, 15% to accounts, and accounts are also limited to half of the free flash.
+
+| Mode | Reserve kept free | Traffic allowance per session | Shaped session counted as |
 |---|---|---|---|
-| MIPS 24Kc / 74Kc | 64–128 MB | 100–250 clients | use `shaper 'nft'` (policer, no tc) below 128 MB |
-| MT7621, IPQ40xx | 128–256 MB | 500–1000 clients | HTB shaping fine |
-| x86 / ARM64 | ≥ 256 MB | 2000+ clients | measured above |
+| safe (default) | 30% of RAM, at least 16 MB | 96 KiB | 141 KiB |
+| balanced | 20%, at least 12 MB | 48 KiB | 93 KiB |
+| max | 12%, at least 8 MB | 16 KiB | 61 KiB |
 
-Memory per shaped session ≈ 14 KB in the daemon + ~3 KB tc + nft elements; unshaped sessions cost about
-half. The poll cycle grows linearly (~0.3 ms per session on the VM); expect 3–5× that on MIPS, so leave
+The traffic allowance covers what a busy client adds outside the hotspot (conntrack entries, socket
+and queue memory). What that gives (shaped, typical free memory after boot):
+
+| Router | RAM / free | safe | balanced | max |
+|---|---|---|---|---|
+| 64 MB MIPS | 59 / 25 MB | 44 sessions | 116 | 234 |
+| 128 MB MT7621 / IPQ40xx | 123 / 75 MB | 229 | 460 | 839 |
+| test VM | 236 / 140 MB | 415 | 846 | 1554 (2000 measured working without traffic) |
+
+Logins beyond the limit are refused with "the hotspot is full", unless `capacity_override` is set;
+user accounts beyond it need an admin to confirm (LuCI, panel, `force=1` in the CLI). Status,
+diagnostics, LuCI (Settings → Capacity) and `wrthotspot status` show tier, mode and usage.
+
+The poll cycle grows linearly (~0.3 ms per session on the VM); expect 3–5× that on MIPS, so leave
 `poll_interval` at its 10 s default (or raise it) above ~500 sessions.
 
 Portal bursts: every unauthenticated device's captive probes reach the portal, so a crowd arriving at

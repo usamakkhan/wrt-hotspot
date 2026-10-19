@@ -56,6 +56,10 @@ print(`== load test: ${N} clients, rate limit ${RATE}\n`);
 
 // Profile for the load users (rate-limited: worst case for tc).
 sh(`uci set wrthotspot.loadprof=user_profile; uci set wrthotspot.loadprof.rate_limit='${RATE}'; uci set wrthotspot.loadprof.keepalive_timeout=0; uci set wrthotspot.loadprof.shared_users=1; uci commit wrthotspot`);
+// This measures the control plane at N sessions, beyond what the capacity
+// tiers would allow on a small VM: switch the limits off for the run.
+let cap_before = sh('uci -q get wrthotspot.global.capacity');
+sh('uci set wrthotspot.global.capacity=off; uci commit wrthotspot');
 hs('reload');
 for (let tries = 0; tries < 100 && !status(); tries++)
 	sleep(200);
@@ -179,5 +183,7 @@ fs.writefile('/tmp/load-neigh.batch', del);
 sh('ip -6 -batch /tmp/load-neigh.batch');
 fs.unlink('/tmp/load-neigh.batch');
 sh('uci -q delete wrthotspot.loadprof; uci commit wrthotspot');
+sh(length(cap_before) ? `uci set wrthotspot.global.capacity='${cap_before}'; uci commit wrthotspot`
+	: 'uci -q delete wrthotspot.global.capacity; uci commit wrthotspot');
 hs('reload');
 report('cleanup: sessions / users left', sprintf('%d / %d', status().sessions, status().users));

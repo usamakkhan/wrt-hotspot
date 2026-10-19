@@ -2,10 +2,15 @@
 'use strict';
 import * as nft from 'wrthotspot.nft';
 
-let devices = { 'br-hs': 'hs1' };
+let devices = { 'br-hs': 'hs1', 'br-hs2': 'hs2', 'br-hs3': 'hs3' };
 
 print(nft.ruleset({
 	ifaces: keys(devices), devices, port: 8002,
+	proxies: [
+		{ dev: 'br-hs', local: true, port: 3128 },
+		{ dev: 'br-hs2', local: false, family: 4, address: '192.0.2.8', port: 8080 },
+		{ dev: 'br-hs3', local: false, family: 6, address: '2001:db8::8', port: 3128 },
+	],
 	sessions: [
 		{ slot: 1, mac: '02:00:00:00:00:10', lim: { up: { rate: 64000, burst: 32000 }, down: { rate: 250000, burst: 125000 } } },
 		{ slot: 2, mac: '02:00:00:00:00:11', lim: { up: null, down: { rate: 125000, burst: 62500 } } },
