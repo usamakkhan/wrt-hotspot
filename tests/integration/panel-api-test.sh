@@ -105,6 +105,20 @@ check_not "operator: no other ubus objects" rpc_ok "$sid" system board '{}'
 asid=$(login_sid boss1 Boss-pass-1)
 check "admin: whoami says admin" rpc_has "$asid" wrthotspot whoami '{}' '"admin":true'
 check "admin: lists operators" rpc_has "$asid" wrthotspot operator_list '{}' staff1
+
+# Capacity: the router is "full"; operators are refused, admins may force.
+n=$(ub_val status '{}' '@.users')
+uci set wrthotspot.global.max_users="$n"; uci commit wrthotspot; ubus call wrthotspot reload >/dev/null; sleep 1
+check "capacity: refusal carries the capacity details" rpc_has "$sid" wrthotspot user_set '{"name":"capx1","password":"pw123456"}' '"capacity"'
+check_not "capacity: operator force is ignored" rpc_has "$sid" wrthotspot user_set '{"name":"capx1","password":"pw123456","force":true}' '"ok":true'
+check_not "capacity: operator batch refused" rpc_has "$sid" wrthotspot voucher_create '{"count":2,"profile":"default","force":true}' '"ok":true'
+check "capacity: admin force adds with a warning" rpc_has "$asid" wrthotspot user_set '{"name":"capx2","password":"pw123456","force":true}' '"warning"'
+check "capacity: admin forced batch" rpc_has "$asid" wrthotspot voucher_create '{"count":2,"profile":"default","comment":"cap test","force":true}' '"ok":true'
+uci -q delete wrthotspot.global.max_users; uci commit wrthotspot; ubus call wrthotspot reload >/dev/null
+wrthotspot user del capx2 >/dev/null 2>&1
+for b in $(ubus call wrthotspot voucher_batches | jsonfilter -e '@.batches[@.comment="cap test"].batch'); do
+	ubus call wrthotspot voucher_revoke "{\"batch\":\"$b\",\"all\":true}" >/dev/null
+done
 check_not "admin: still no UCI" rpc_ok "$asid" uci get '{"config":"network"}'
 check_not "admin cannot delete itself" rpc_has "$asid" wrthotspot operator_remove '{"username":"boss1"}' '"ok":true'
 check "admin removes operator" rpc_has "$asid" wrthotspot operator_remove '{"username":"staff1"}' '"ok":true'

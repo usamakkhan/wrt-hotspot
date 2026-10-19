@@ -57,7 +57,8 @@
 	"admin/services/wrthotspot/radius": {
 		"title": "RADIUS",
 		"order": 80,
-		"action": { "type": "view", "path": "wrthotspot/radius" }
+		"action": { "type": "view", "path": "wrthotspot/radius" },
+		"depends": { "fs": { "/usr/share/ucode/wrthotspot/radius.uc": "file" } }
 	},
 
 	"admin/services/wrthotspot/settings": {

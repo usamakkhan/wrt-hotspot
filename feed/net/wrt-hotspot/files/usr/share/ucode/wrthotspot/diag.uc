@@ -83,6 +83,24 @@ export function run_checks(cfg, state) {
 		add(`dhcp:${name}`, dhcp ? 'ok' : 'warn',
 			dhcp ? `Server ${name}: DHCP is served on ${srv.interface}` : `Server ${name}: no DHCP on ${srv.interface}; clients need addresses`,
 			dhcp ? null : `setup:${srv.interface}`);
+
+		// Transparent proxy on the router: its port must be open like the portal,
+		// and something must listen there.
+		let sp = cfg.server_profiles[srv.profile] ?? cfg.server_profiles.default;
+		if (sp?.transparent_proxy && sp.http_proxy?.local) {
+			let pp = sp.http_proxy.port, open = false;
+
+			c.foreach('firewall', 'rule', (r) => {
+				if (r.src == zone && index(split(`${r.dest_port ?? ''}`, ' '), `${pp}`) >= 0)
+					open = true;
+			});
+
+			add(`proxy:${name}`, (open && listening(pp)) ? 'ok' : 'error',
+				!open ? `Server ${name}: transparent proxy port ${pp} is not open for zone ${zone ?? '?'}`
+				: !listening(pp) ? `Server ${name}: transparent proxy enabled but nothing listens on port ${pp} (e.g. squid with "http_port ${pp} intercept")`
+				: `Server ${name}: transparent HTTP proxy on port ${pp}`,
+				open ? null : `setup:${srv.interface}`);
+		}
 	}
 
 	let portal = listening(cfg.global.portal_port);
@@ -122,7 +140,11 @@ export function run_checks(cfg, state) {
 		: (backend == 'nft') ? `Rate limits: nftables policing${tc ? '' : ' (install wrt-hotspot-shaper for HTB shaping)'}`
 		: (backend == 'off') ? 'Rate limits are switched off' : 'Rate limiting not active');
 
-	if (length(cfg.radius)) {
+	let rad_pkg = fs.access('/usr/share/ucode/wrthotspot/radius.uc');
+
+	if (length(cfg.radius) && !rad_pkg)
+		add('radius', 'error', `${length(cfg.radius)} RADIUS server(s) configured but wrt-hotspot-radius is not installed: only local users can log in`);
+	else if (length(cfg.radius)) {
 		let coa = cfg.global.coa_port ? udp_listening(cfg.global.coa_port) : false;
 		add('radius', 'ok', `${length(cfg.radius)} RADIUS server(s) configured`);
 		add('coa', !cfg.global.coa_port ? 'info' : (coa ? 'ok' : 'error'),
@@ -130,6 +152,31 @@ export function run_checks(cfg, state) {
 
 		if (state?.radius_backlog)
 			add('acct_backlog', 'warn', `${state.radius_backlog} accounting request(s) waiting for a RADIUS server`);
+	}
+
+	if (cfg.global.api_enable) {
+		let g = cfg.global;
+		let who = length(g.api_allow) ? join(', ', g.api_allow) : 'the RADIUS servers and localhost';
+
+		if (!rad_pkg)
+			add('api', 'error', 'api_enable is set but the RouterOS API needs wrt-hotspot-radius');
+		else if (!state?.api)
+			add('api', state?.running ? 'error' : 'info', `RouterOS API not listening on tcp/${g.api_port}`);
+		else
+			add('api', 'ok', `RouterOS API on tcp/${g.api_port} for ${who}; allow that port from the billing server in the firewall`);
+
+		if (!length(g.api_password))
+			add('api_login', 'warn', 'No api_user / api_password: only admin operators can log in to the API (and not with the old challenge login)');
+	}
+
+	// Capacity tiers (capacity.uc).
+	let cp = state?.capacity;
+	if (cp && cp.mode != 'off') {
+		let over = cp.over_sessions || cp.over_users;
+		add('capacity', over ? 'warn' : 'ok',
+			sprintf('%s RAM tier, %s mode: %d/%d sessions, %d/%d user accounts%s', cp.tier?.label ?? '?', cp.mode,
+				cp.sessions, cp.max_sessions, cp.users, cp.max_users,
+				over ? ' - above the recommended capacity' : ''));
 	}
 
 	// Kernel tables that bound how many clients the router can carry.

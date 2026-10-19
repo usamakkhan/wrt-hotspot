@@ -1,9 +1,22 @@
 'use strict';
 import { suite, eq, done } from 'assert';
-import { parse_prefix, parse_host } from 'wrthotspot.config';
+import { parse_prefix, parse_host, parse_proxy, radius_preset } from 'wrthotspot.config';
 import { parse_nslookup } from 'wrthotspot.dns';
 
 suite('config');
+
+eq(parse_proxy(null), { local: true, port: 3128 }, 'proxy: default = local 3128');
+eq(parse_proxy('0.0.0.0:0'), { local: true, port: 3128 }, 'proxy: MikroTik default');
+eq(parse_proxy(':8080'), { local: true, port: 8080 }, 'proxy: local port');
+eq(parse_proxy('10.0.0.5:3128'), { local: false, family: 4, address: '10.0.0.5', port: 3128 }, 'proxy: remote v4');
+eq(parse_proxy('[2001:DB8::5]:3128'), { local: false, family: 6, address: '2001:db8::5', port: 3128 }, 'proxy: remote v6');
+eq(parse_proxy('proxy.lan:3128'), null, 'proxy: host names are not accepted');
+eq(parse_proxy('10.0.0.5:99999'), null, 'proxy: bad port');
+
+eq(radius_preset('sas4'), 'mikrotik', 'preset alias sas4');
+eq(radius_preset('radiusdesk'), 'coova', 'preset alias radiusdesk');
+eq(radius_preset('generic'), 'generic', 'preset generic');
+eq(radius_preset('whatever'), 'mikrotik', 'unknown preset = mikrotik');
 
 eq(parse_prefix('10.0.0.5/8'), { family: 4, cidr: '10.0.0.0/8' }, 'host bits cleared');
 eq(parse_prefix('192.168.1.7'), { family: 4, cidr: '192.168.1.7' }, 'single v4');

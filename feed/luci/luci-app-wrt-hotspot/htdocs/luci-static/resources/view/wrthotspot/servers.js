@@ -27,11 +27,16 @@ function uniqueName(type) {
 
 return view.extend({
 	load: function() {
-		return uci.load('wrthotspot');
+		return Promise.all([
+			uci.load('wrthotspot'),
+			L.resolveDefault(hs.status(), {})
+		]);
 	},
 
-	render: function() {
+	render: function(data) {
 		var m, s, o;
+		// RADIUS options only when wrt-hotspot-radius is installed (unknown: show them).
+		var hasRadius = (data[1] || {}).radius !== false;
 
 		m = new form.Map('wrthotspot', _('Hotspot servers'),
 			_('One hotspot server per network (MikroTik /ip hotspot). Clients on that network must log in. The easiest start is <code>wrthotspot setup &lt;network&gt;</code> or the Diagnostics tab, which also create the firewall zone, rules and DHCP.'));
@@ -82,7 +87,8 @@ return view.extend({
 
 		s.tab('general', _('General'));
 		s.tab('trial', _('Trial'));
-		s.tab('radius', _('RADIUS'));
+		if (hasRadius)
+			s.tab('radius', _('RADIUS'));
 
 		o = s.taboption('general', form.Value, 'name', _('Name'));
 		o.rmempty = false;
@@ -114,6 +120,21 @@ return view.extend({
 		o.placeholder = '/usr/share/wrthotspot/pages/default';
 		o.modalonly = true;
 
+		o = s.taboption('general', form.Flag, 'transparent_proxy', _('Transparent HTTP proxy'),
+			_('Plain HTTP of logged-in clients goes through a proxy (MikroTik transparent-proxy). The proxy must accept intercepted traffic, e.g. squid with <code>http_port 3128 intercept</code>.'));
+		o.modalonly = true;
+
+		o = s.taboption('general', form.Value, 'http_proxy', _('HTTP proxy'),
+			_('Empty or <code>:port</code> = a proxy on this router (port 3128 by default); <code>address:port</code> or <code>[IPv6]:port</code> = another host, used for that address family only.'));
+		o.placeholder = ':3128';
+		o.depends('transparent_proxy', '1');
+		o.modalonly = true;
+		o.validate = function(section_id, value) {
+			if (!value || /^(\[[0-9A-Fa-f:.]+\]|[0-9.]*):[0-9]{1,5}$/.test(value))
+				return true;
+			return _('Use :port, address:port or [IPv6]:port');
+		};
+
 		o = s.taboption('general', form.Flag, 'split_user_domain', _('Split user domain'),
 			_('Strip user@domain / domain\\user to the user part.'));
 		o.modalonly = true;
@@ -138,38 +159,40 @@ return view.extend({
 		o.default = 'default';
 		o.modalonly = true;
 
-		o = s.taboption('radius', form.Flag, 'use_radius', _('Use RADIUS'),
-			_('Unknown users are authenticated by the RADIUS servers (local users are checked first).'));
+		if (hasRadius) {
+			o = s.taboption('radius', form.Flag, 'use_radius', _('Use RADIUS'),
+				_('Unknown users are authenticated by the RADIUS servers (local users are checked first).'));
 
-		o = s.taboption('radius', form.Flag, 'radius_accounting', _('Accounting'));
-		o.default = '1';
-		o.depends('use_radius', '1');
-		o.modalonly = true;
+			o = s.taboption('radius', form.Flag, 'radius_accounting', _('Accounting'));
+			o.default = '1';
+			o.depends('use_radius', '1');
+			o.modalonly = true;
 
-		o = s.taboption('radius', form.Value, 'radius_interim_update', _('Interim update'),
-			_('<code>received</code> = use Acct-Interim-Interval from the server, or a duration.'));
-		o.placeholder = 'received';
-		o.depends('use_radius', '1');
-		o.modalonly = true;
+			o = s.taboption('radius', form.Value, 'radius_interim_update', _('Interim update'),
+				_('<code>received</code> = use Acct-Interim-Interval from the server, or a duration.'));
+			o.placeholder = 'received';
+			o.depends('use_radius', '1');
+			o.modalonly = true;
 
-		o = s.taboption('radius', form.ListValue, 'radius_mac_format', _('MAC format'));
-		[ 'XX:XX:XX:XX:XX:XX', 'xx:xx:xx:xx:xx:xx', 'XX-XX-XX-XX-XX-XX', 'xx-xx-xx-xx-xx-xx', 'XXXXXXXXXXXX', 'xxxxxxxxxxxx', 'XXXX.XXXX.XXXX', 'xxxx.xxxx.xxxx' ]
-			.forEach(function(f) { o.value(f); });
-		o.depends('use_radius', '1');
-		o.modalonly = true;
+			o = s.taboption('radius', form.ListValue, 'radius_mac_format', _('MAC format'));
+			[ 'XX:XX:XX:XX:XX:XX', 'xx:xx:xx:xx:xx:xx', 'XX-XX-XX-XX-XX-XX', 'xx-xx-xx-xx-xx-xx', 'XXXXXXXXXXXX', 'xxxxxxxxxxxx', 'XXXX.XXXX.XXXX', 'xxxx.xxxx.xxxx' ]
+				.forEach(function(f) { o.value(f); });
+			o.depends('use_radius', '1');
+			o.modalonly = true;
 
-		o = s.taboption('radius', form.ListValue, 'nas_port_type', _('NAS-Port-Type'));
-		[ 'wireless-802.11', 'ethernet', 'virtual', 'async', 'sync' ].forEach(function(t) { o.value(t); });
-		o.depends('use_radius', '1');
-		o.modalonly = true;
+			o = s.taboption('radius', form.ListValue, 'nas_port_type', _('NAS-Port-Type'));
+			[ 'wireless-802.11', 'ethernet', 'virtual', 'async', 'sync' ].forEach(function(t) { o.value(t); });
+			o.depends('use_radius', '1');
+			o.modalonly = true;
 
-		o = s.taboption('radius', form.Value, 'radius_location_id', _('WISPr location ID'));
-		o.depends('use_radius', '1');
-		o.modalonly = true;
+			o = s.taboption('radius', form.Value, 'radius_location_id', _('WISPr location ID'));
+			o.depends('use_radius', '1');
+			o.modalonly = true;
 
-		o = s.taboption('radius', form.Value, 'radius_location_name', _('WISPr location name'));
-		o.depends('use_radius', '1');
-		o.modalonly = true;
+			o = s.taboption('radius', form.Value, 'radius_location_name', _('WISPr location name'));
+			o.depends('use_radius', '1');
+			o.modalonly = true;
+		}
 
 		return m.render();
 	}

@@ -1,6 +1,6 @@
 'use strict';
 import { suite, eq, ok, done } from 'assert';
-import * as r from 'wrthotspot.radius';
+const r = require('wrthotspot.radius');	// a script (optional package), not a module
 
 suite('radius');
 

@@ -306,6 +306,44 @@ check "table rebuilt after deletion" nft list table inet wrthotspot
 check "session survives table deletion" online4
 check "walled garden host refilled after rebuild" sh -c "nft list set inet wrthotspot wgh4_4 | grep -q 10.98.0.4"
 
+echo "== transparent HTTP proxy"
+# Stand-in proxies: answer /x with a marker, so the client sees which way it went.
+mkdir -p /tmp/hsproxy-local /tmp/hsproxy-remote
+echo via-local-proxy > /tmp/hsproxy-local/x
+echo via-remote-proxy > /tmp/hsproxy-remote/x
+uhttpd -f -p 0.0.0.0:3128 -p '[::]:3128' -h /tmp/hsproxy-local & lp=$!
+ip netns exec hsinet uhttpd -f -p 10.98.0.5:3128 -h /tmp/hsproxy-remote & rp=$!
+sleep 1
+via() { ccurl "$1" | grep -q "$2"; }
+check_not "no proxy by default" via http://10.98.0.2/x via-
+uci set wrthotspot.@server_profile[0].transparent_proxy=1
+uci commit wrthotspot
+reload_hs
+check "diagnostics: proxy port not open yet" sh -c "wrthotspot check | grep -q 'proxy port 3128 is not open'"
+wrthotspot setup hstest >/dev/null
+/etc/init.d/firewall reload >/dev/null 2>&1
+sleep 1
+check "setup opens the proxy port" sh -c "uci show firewall | grep -q \"Allow-hstest-Proxy\""
+check "diagnostics: proxy ok" sh -c "wrthotspot check | grep -q 'transparent HTTP proxy on port 3128'"
+check "local proxy: IPv4 HTTP redirected" via http://10.98.0.2/x via-local-proxy
+check "local proxy: IPv6 HTTP redirected" via 'http://[fd98::2]/x' via-local-proxy
+check "local proxy: portal itself not proxied" page_has "$P/status" alice
+uci set wrthotspot.@server_profile[0].http_proxy=10.98.0.5:3128
+uci commit wrthotspot
+reload_hs
+check "remote proxy: IPv4 HTTP sent to 10.98.0.5:3128" via http://10.98.0.2/x via-remote-proxy
+check_not "remote IPv4 proxy leaves IPv6 alone" via 'http://[fd98::2]/x' via-
+uci -q delete wrthotspot.@server_profile[0].transparent_proxy
+uci -q delete wrthotspot.@server_profile[0].http_proxy
+uci commit wrthotspot
+reload_hs
+check_not "proxy off again" via http://10.98.0.2/x via-
+wrthotspot setup hstest >/dev/null
+/etc/init.d/firewall reload >/dev/null 2>&1
+check_not "setup removes the proxy rule again" sh -c "uci show firewall | grep -q \"Allow-hstest-Proxy\""
+kill $lp $rp 2>/dev/null
+rm -rf /tmp/hsproxy-local /tmp/hsproxy-remote
+
 echo "== logout"
 check "portal logout" sh -c "ip netns exec hsclient curl -s -m 5 -X POST $P/logout | grep -q 'logged out'"
 check_not "IPv4 blocked again" online4
@@ -482,12 +520,24 @@ ATTRIBUTE	Mikrotik-Recv-Limit		1	integer
 ATTRIBUTE	Mikrotik-Xmit-Limit		2	integer
 ATTRIBUTE	Mikrotik-Group			3	string
 ATTRIBUTE	Mikrotik-Rate-Limit		8	string
+ATTRIBUTE	Mikrotik-Host-IP		10	ipaddr
 ATTRIBUTE	Mikrotik-Recv-Limit-Gigawords	14	integer
 ATTRIBUTE	Mikrotik-Xmit-Limit-Gigawords	15	integer
 ATTRIBUTE	Mikrotik-Total-Limit		17	integer
 ATTRIBUTE	Mikrotik-Total-Limit-Gigawords	18	integer
 ATTRIBUTE	Mikrotik-Address-List		19	string
 END-VENDOR	Mikrotik
+VENDOR		ChilliSpot			14559
+BEGIN-VENDOR	ChilliSpot
+ATTRIBUTE	ChilliSpot-Max-Total-Octets	3	integer
+ATTRIBUTE	ChilliSpot-Bandwidth-Max-Up	4	integer
+ATTRIBUTE	ChilliSpot-Bandwidth-Max-Down	5	integer
+END-VENDOR	ChilliSpot
+VENDOR		Ascend				529
+BEGIN-VENDOR	Ascend
+ATTRIBUTE	Ascend-Data-Rate		197	integer
+ATTRIBUTE	Ascend-Xmit-Rate		255	integer
+END-VENDOR	Ascend
 EOF
 	soon=$(date -u -d @$(( $(date +%s) + 25 )) +%Y-%m-%dT%H:%M:%SZ)
 	{ cat <<EOF
@@ -505,6 +555,13 @@ radgroup Cleartext-Password := "x"
 	Mikrotik-Group = "idleprof"
 radwispr Cleartext-Password := "x"
 	WISPr-Session-Terminate-Time = "$soon"
+radchilli Cleartext-Password := "x"
+	ChilliSpot-Bandwidth-Max-Up = 512,
+	ChilliSpot-Bandwidth-Max-Down = 2048,
+	ChilliSpot-Max-Total-Octets = 5000000
+radascend Cleartext-Password := "x"
+	Ascend-Data-Rate = 256000,
+	Ascend-Xmit-Rate = 1000000
 radbad Auth-Type := Reject
 	Reply-Message = "Account suspended"
 "02:00:00:00:99:10" Cleartext-Password := "macsecret"
@@ -589,6 +646,33 @@ EOF
 	post_has 'username=radwispr&password=x' 'You are connected'
 	check "WISPr-Session-Terminate-Time applied" sh -c "t=\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radwispr'].limits.max_uptime\"); [ \$t -gt 0 ] && [ \$t -le 26 ]"
 	wrthotspot logout radwispr >/dev/null
+
+	# Third-party servers: CoovaChilli and Ascend attributes, presets.
+	post_has 'username=radchilli&password=x' 'You are connected'
+	check "ChilliSpot bandwidth (kbit/s) becomes the rate limit" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radchilli'].rate_limit\")\" = 512000/2048000 ]"
+	check "ChilliSpot-Max-Total-Octets applied" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radchilli'].limits.bytes_total\")\" = 5000000 ]"
+	wrthotspot logout radchilli >/dev/null
+	post_has 'username=radascend&password=x' 'You are connected'
+	check "Ascend-Data-Rate / Ascend-Xmit-Rate become the rate limit" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radascend'].rate_limit\")\" = 256000/1000000 ]"
+	wrthotspot logout radascend >/dev/null
+	check "mikrotik preset sends Mikrotik-Host-IP and server name" sh -c "cat $ACCT/detail-* | grep -q 'Mikrotik-Host-IP = 10.99.0.10' && cat $ACCT/detail-* | grep -q 'Called-Station-Id = \"hstest\"'"
+
+	fmt=$(uci -q get wrthotspot.@server_profile[0].radius_mac_format)
+	uci -q delete wrthotspot.@server_profile[0].radius_mac_format	# let the preset decide
+	uci set wrthotspot.global.radius_preset=coova
+	uci commit wrthotspot
+	reload_hs
+	post_has 'username=radalice&password=radpw' 'You are connected'
+	sleep 1
+	wrthotspot logout radalice >/dev/null
+	sleep 1
+	bmac=$(tr 'a-f:' 'A-F-' < /sys/class/net/br-hstest/address)
+	check "coova preset: Calling-Station-Id with dashes" sh -c "cat $ACCT/detail-* | grep -q 'Calling-Station-Id = \"02-00-00-00-99-10\"'"
+	check "coova preset: Called-Station-Id = router MAC:server" sh -c "cat $ACCT/detail-* | grep -q 'Called-Station-Id = \"$bmac:hstest\"'"
+	uci -q delete wrthotspot.global.radius_preset
+	[ -n "$fmt" ] && uci set wrthotspot.@server_profile[0].radius_mac_format="$fmt"
+	uci commit wrthotspot
+	reload_hs
 
 	wrthotspot cookie del 02:00:00:00:99:10 >/dev/null
 	uci set wrthotspot.@server_profile[0].mac_auth_password=macsecret

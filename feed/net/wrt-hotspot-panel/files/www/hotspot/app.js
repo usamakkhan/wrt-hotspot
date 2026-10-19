@@ -102,7 +102,7 @@
 			if (r.result[0] === 6) throw new Error('permission denied');
 			if (r.result[0] !== 0) throw new Error('error ' + r.result[0]);
 			var res = r.result[1] || {};
-			if (res.ok === false) throw new Error(res.error || 'failed');
+			if (res.ok === false) { var err = new Error(res.error || 'failed'); err.result = res; throw err; }
 			return res;
 		});
 	}
@@ -116,11 +116,38 @@
 
 	function fail(e) { toast(e.message || String(e), true); }
 
+	// Creating users/vouchers beyond the router's capacity: admins may add them
+	// anyway after a warning, operators only see why it was refused.
+	// Resolves to the result, or null when the admin cancels.
+	function hsCreate(method, args) {
+		return hs(method, args).catch(function (e) {
+			var cap = e.result && e.result.capacity;
+			if (!cap || !S.admin) throw e;
+			return new Promise(function (resolve, reject) {
+				var done = false;
+				modal('Above this router\'s capacity', h('div', {},
+					h('p', {}, e.message),
+					h('p', { 'class': 'muted' }, (cap.tier || {}).label + ' RAM tier, ' + cap.mode + ' mode: ' + cap.users + ' of ' +
+						cap.max_users + ' user accounts. More accounts use more memory and flash and can slow the router down.')),
+				[{ label: 'Add anyway', cls: 'danger', run: function () {
+					done = true;
+					var b = {};
+					Object.keys(args).forEach(function (k) { b[k] = args[k]; });
+					b.force = true;
+					return hs(method, b).then(function (r) { if (r.warning) toast(r.warning, true); resolve(r); },
+						function (x) { reject(x); throw x; });
+				} }], function () { if (!done) resolve(null); });
+			});
+		});
+	}
+
 	/* ---------- modal ---------- */
 
-	function modal(title, body, actions) {
+	// onClose: called once when the dialog goes away (any button or backdrop).
+	function modal(title, body, actions, onClose) {
 		var bd = h('div', { 'class': 'backdrop', onclick: function (e) { if (e.target === bd) close(); } });
-		function close() { bd.remove(); }
+		var closed = false;
+		function close() { if (closed) return; closed = true; bd.remove(); if (onClose) onClose(); }
 		var foot = h('div', { 'class': 'foot' }, h('button', { 'class': 'btn', type: 'button', onclick: close }, 'Cancel'));
 		(actions || []).forEach(function (a) {
 			foot.appendChild(h('button', { 'class': 'btn ' + (a.cls || 'primary'), type: 'button', onclick: function () {
@@ -343,7 +370,8 @@
 					var a = {};
 					Object.keys(f).forEach(function (k) { a[k] = f[k].value.trim(); });
 					a.count = +a.count; a.length = +a.length;
-					hs('voucher_create', a).then(function (r) {
+					hsCreate('voucher_create', a).then(function (r) {
+						if (!r) return;
 						toast(r.vouchers.length + ' vouchers created in ' + r.batch);
 						loadBatches();
 					}).catch(fail);
@@ -413,7 +441,10 @@
 			Object.keys(f).forEach(function (k) { a[k] = (k === 'disabled') ? f[k].checked : f[k].value.trim(); });
 			if (!isNew) { a.name = u.name; if (a.password === '') delete a.password; }
 			if (!a.name) { toast('A name is required', true); return false; }
-			return hs('user_set', a).then(function () { toast('Saved'); done(); });
+			return (isNew ? hsCreate('user_set', a) : hs('user_set', a)).then(function (r) {
+				if (!r) return true;	// capacity warning cancelled: keep the form open
+				toast('Saved'); done();
+			});
 		} }]);
 	}
 

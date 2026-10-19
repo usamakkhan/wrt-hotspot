@@ -14,7 +14,7 @@ var callUsers = rpc.declare({ object: 'wrthotspot', method: 'user_list', params:
 var callUserSet = rpc.declare({
 	object: 'wrthotspot', method: 'user_set',
 	params: [ 'name', 'password', 'profile', 'server', 'mac', 'limit_uptime', 'limit_bytes_in',
-		'limit_bytes_out', 'limit_bytes_total', 'disabled', 'comment', 'email' ]
+		'limit_bytes_out', 'limit_bytes_total', 'disabled', 'comment', 'email', 'force' ]
 });
 var callUserRemove = rpc.declare({ object: 'wrthotspot', method: 'user_remove', params: [ 'name' ] });
 var callUserReset = rpc.declare({ object: 'wrthotspot', method: 'user_reset_counters', params: [ 'name' ] });

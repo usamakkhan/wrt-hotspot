@@ -3,14 +3,15 @@
 A MikroTik-Hotspot-class captive portal for OpenWrt 24.10+, with full IPv6 support, RADIUS (incl. CoA),
 vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 
-Status: **Phases 1–6 working, Phase 7 qualified on x86** (0.7.0): tested end to end on OpenWrt 25.12.5
-x86-64 against FreeRADIUS 3.2.10, rates measured by iperf3 (137 + 48 end-to-end checks), 2000 sessions
-on one 236 MB VM and 150 simultaneous real clients through the portal. Packages build with the official
-24.10 (ipk) and 25.12 (apk) SDKs. Physical MIPS/ARM routers are still to be tested.
+Status: **0.8.0 — Phases 1–8 working, qualified on x86**: tested end to end on OpenWrt 25.12.5 x86-64
+against FreeRADIUS 3.2.10 (154 + 53 + 16 + 32 + 16 end-to-end checks), rates measured by iperf3, 2000 sessions on one 236 MB VM and
+150 simultaneous real clients through the portal, upgrades from 0.7.0 through the signed feed. Packages
+build with the official 24.10 (ipk) and 25.12 (apk) SDKs. Physical MIPS/ARM routers are still to be tested.
 
 - [docs/research.md](docs/research.md) — stack, prior art, dataplane and MikroTik feature research
 - [docs/architecture.md](docs/architecture.md) — architecture, phases and MikroTik parity matrix
-- [docs/qualification.md](docs/qualification.md) — load and traffic tests, capacity guidance
+- [docs/qualification.md](docs/qualification.md) — load and traffic tests, capacity tiers
+- [docs/billing-integration.md](docs/billing-integration.md) — SAS4 and other RADIUS / billing systems, RouterOS API
 
 ## What works today
 
@@ -49,6 +50,17 @@ on one 236 MB VM and 150 simultaneous real clients through the portal. Packages 
   window, and download/upload/transfer/uptime quotas per hourly/daily/weekly/monthly period. Logins outside
   every window are refused and sessions end when the window closes.
 - `wrthotspot` CLI: `setup <network>` wizard (zone, rules, DHCP/RA, offload off, server), `cert`, `cookies`, …
+- Capacity tiers: from its RAM and flash the router knows how many sessions and user accounts it can
+  carry while keeping a free-memory buffer (modes safe / balanced / max). Logins beyond the limit are
+  refused ("the hotspot is full") unless `capacity_override` is set; adding users beyond it needs an
+  admin to confirm a warning. Manual `max_sessions` / `max_users` override the computed values.
+- Third-party RADIUS / billing: presets for MikroTik-style servers (SAS4, Radius Manager, Splynx,
+  User Manager, daloRADIUS) and CoovaChilli-style ones (RADIUSdesk, HotspotSystem); ChilliSpot and
+  Ascend attributes; a RouterOS API subset on tcp/8728 so billing systems can list and disconnect
+  online users and manage hotspot users. See [docs/billing-integration.md](docs/billing-integration.md).
+- RADIUS is optional (`wrt-hotspot-radius`): small routers run on local users and vouchers only.
+- Transparent HTTP proxy per server profile (MikroTik `transparent-proxy` / `http-proxy`): a proxy on
+  the router (IPv4 + IPv6) or another host.
 
 ## Operator panel
 
@@ -75,7 +87,7 @@ Diagnostics (health checks with one-click fixes, hotspot network setup, log ever
 Configuration changes apply through LuCI's normal Save & Apply; hotspotd reloads in place without
 dropping sessions.
 
-Optional packages: `wrt-hotspot-shaper` (tc HTB shaping), `dnsmasq-full` (walled-garden subdomains),
+Optional packages: `wrt-hotspot-radius` (RADIUS, billing), `wrt-hotspot-shaper` (tc HTB shaping), `dnsmasq-full` (walled-garden subdomains),
 `libustream-mbedtls` (HTTPS login).
 
 Measured on the test VM (iperf3 through the hotspot, steady state): `1M/4M` → 3.88 / 3.77 Mbit/s down
@@ -109,12 +121,46 @@ tests/integration/              end-to-end netns test   (sh tests/integration/ne
 On a Linux host with the [SDK prerequisites](https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem):
 
 ```sh
-scripts/build-packages.sh 24.10.8     # -> dist/24.10.8/*.ipk
-scripts/build-packages.sh 25.12.6     # -> dist/25.12.6/*.apk
+scripts/build-packages.sh 24.10.8     # -> dist/24.10.8/: *.ipk + Packages (usign-signed) + public key
+scripts/build-packages.sh 25.12.6     # -> dist/25.12.6/: *.apk + packages.adb (signed) + wrthotspot.pem
 ```
 
-The packages are architecture independent, so one build serves every target of a release. CI
-(`.github/workflows/ci.yml`) runs the unit tests in the OpenWrt rootfs images and builds both sets.
+Each `dist/<release>/` is a complete signed package feed. The signing keys are created on the first
+build in `~/.wrthotspot-keys` (or `$WRTHOTSPOT_KEYS`): keep them, every later release must be signed
+with the same keys. The packages are architecture independent, so one feed serves every target of a
+release. CI (`.github/workflows/ci.yml`) runs the unit tests in the OpenWrt rootfs images and builds
+both sets.
+
+| Package | Contents |
+|---|---|
+| `wrt-hotspot` | daemon, portal, CLI, local users and vouchers |
+| `wrt-hotspot-radius` | RADIUS, CoA, billing presets, RouterOS API (needs the same core version) |
+| `wrt-hotspot-shaper` | pulls in tc / HTB / IFB for real shaping |
+| `wrt-hotspot-panel` | operator panel at `/hotspot/` |
+| `luci-app-wrt-hotspot` | LuCI pages (translation template in `po/templates`, `scripts/i18n-scan.py`) |
+| `wrt-hotspot-full` | all of the above |
+
+### Install from the feed
+
+Publish `dist/<release>/` on any web server, then on the router:
+
+```sh
+# 25.12 (apk)
+wget -O /etc/apk/keys/wrthotspot.pem https://example.com/wrthotspot/25.12.6/wrthotspot.pem
+echo https://example.com/wrthotspot/25.12.6/packages.adb >> /etc/apk/repositories.d/customfeeds.list
+apk update && apk add wrt-hotspot-full
+
+# 24.10 (opkg)
+wget -O /tmp/wrthotspot.pub https://example.com/wrthotspot/24.10.8/<key id> && opkg-key add /tmp/wrthotspot.pub
+echo 'src/gz wrthotspot https://example.com/wrthotspot/24.10.8' >> /etc/opkg/customfeeds.conf
+opkg update && opkg install wrt-hotspot-full
+```
+
+Upgrades then come with `apk upgrade` / `opkg upgrade`. Packages that were installed from files
+(0.7.0 and earlier) are pinned to those files: add them once by name from the feed
+(`apk add wrt-hotspot wrt-hotspot-shaper wrt-hotspot-panel luci-app-wrt-hotspot`), then
+`apk upgrade`. Since 0.8.0 RADIUS is a separate package: add `wrt-hotspot-radius` if you use it.
+Sessions, users and configuration survive the upgrade (`tests/integration/upgrade-test.sh`).
 
 ## Try it on a router (24.10+)
 

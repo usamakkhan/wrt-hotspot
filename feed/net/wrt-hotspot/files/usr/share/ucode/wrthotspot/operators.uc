@@ -111,6 +111,26 @@ export function list() {
 	return out;
 };
 
+// Check a hotspot operator's password (MD5-crypt as stored for rpcd).
+// -> role ('operator' / 'admin') or null.
+export function verify(username, password) {
+	if (!valid_username(username) || type(password) != 'string' || !length(password))
+		return null;
+
+	let c = cursor();
+	c.load('rpcd');
+
+	let sid = section_of(c, username);
+	let role = sid ? c.get('rpcd', sid, 'wrthotspot_role') : null;
+	let hash = sid ? c.get('rpcd', sid, 'password') : null;
+	let m = match(hash ?? '', /^\$1\$([^$]{1,8})\$/);
+
+	if (!role || !m)
+		return null;
+
+	return (md5crypt(password, m[1]) == hash) ? role : null;
+};
+
 // Create or update; password null keeps the current one. -> error or null
 export function set(username, password, role, comment) {
 	if (!valid_username(username))

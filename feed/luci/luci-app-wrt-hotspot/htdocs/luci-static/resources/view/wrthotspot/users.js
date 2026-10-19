@@ -152,15 +152,28 @@ return view.extend({
 					if (u && v.password === '')
 						v.password = undefined;
 
-					return hs.userSet(v.name, v.password, v.profile, v.server, v.mac, v.limit_uptime,
-						v.limit_bytes_in, v.limit_bytes_out, v.limit_bytes_total, v.disabled, v.comment, v.email)
-					.then(L.bind(function(res) {
-						if (res && res.ok === false)
-							return ui.addNotification(null, E('p', res.error), 'danger');
+					var save = L.bind(function(force) {
+						return hs.userSet(v.name, v.password, v.profile, v.server, v.mac, v.limit_uptime,
+							v.limit_bytes_in, v.limit_bytes_out, v.limit_bytes_total, v.disabled, v.comment, v.email,
+							force ? true : undefined)
+						.then(L.bind(function(res) {
+							// Above the router's capacity: the admin may add the user anyway.
+							if (res && res.ok === false && res.capacity && !force &&
+							    confirm(res.error + '\n\n' + _('More user accounts than recommended use more memory and flash and can slow the router down. Add anyway?')))
+								return save(true);
 
-						ui.hideModal();
-						return this.refresh();
-					}, this));
+							if (res && res.ok === false)
+								return ui.addNotification(null, E('p', res.error), 'danger');
+
+							if (res && res.warning)
+								ui.addNotification(null, E('p', res.warning), 'warning');
+
+							ui.hideModal();
+							return this.refresh();
+						}, this));
+					}, this);
+
+					return save(false);
 				})
 			}, _('Save'))
 		]));

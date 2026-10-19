@@ -13,8 +13,61 @@ function dur(v, dflt) {
 	return (d == null) ? parse_duration(dflt) : d;
 }
 
-function server_profile(s) {
+// RADIUS presets: how requests look to third-party RADIUS / billing servers.
+// They only set defaults; options in a server profile still win.
+//   mikrotik: what RouterOS sends (SAS4, Radius Manager, Splynx, User Manager,
+//             daloRADIUS / FreeRADIUS set up for MikroTik)
+//   coova:    what CoovaChilli sends (RADIUSdesk, HotspotSystem, other UAM billing)
+//   generic:  plain RFC attributes only
+export const RADIUS_PRESETS = {
+	mikrotik: { mac_format: 'XX:XX:XX:XX:XX:XX', called_station: 'server', host_ip: true },
+	coova: { mac_format: 'XX-XX-XX-XX-XX-XX', called_station: 'mac:server', host_ip: false },
+	generic: { mac_format: 'XX:XX:XX:XX:XX:XX', called_station: 'server', host_ip: false },
+};
+
+// Names people look for, mapped to the preset that fits them.
+const PRESET_ALIASES = {
+	sas4: 'mikrotik', sas: 'mikrotik', 'radius-manager': 'mikrotik', splynx: 'mikrotik',
+	usermanager: 'mikrotik', daloradius: 'mikrotik', freeradius: 'generic',
+	radiusdesk: 'coova', hotspotsystem: 'coova', chillispot: 'coova',
+};
+
+export function radius_preset(name) {
+	name = PRESET_ALIASES[name] ?? name;
+	return RADIUS_PRESETS[name] ? name : 'mikrotik';
+};
+
+// "" / ":3128" / "10.0.0.5:3128" / "[2001:db8::5]:3128" ->
+// { local: true, port } or { local: false, family, address, port }; null if invalid.
+export function parse_proxy(v) {
+	v = trim(v ?? '');
+
+	if (v == '' || v == '0.0.0.0:0')
+		return { local: true, port: 3128 };
+
+	let m = match(v, /^\[([0-9A-Fa-f:.]+)\]:([0-9]+)$/) ?? match(v, /^([0-9.]*):([0-9]+)$/);
+	let port = m ? int(m[2]) : 0;
+
+	if (!m || port < 1 || port > 65535) {
+		log('warn', 'Invalid http_proxy "%s" (use :port, ip:port or [ipv6]:port)', v);
+		return null;
+	}
+
+	if (m[1] == '' || m[1] == '0.0.0.0')
+		return { local: true, port };
+
+	let arr = iptoarr(m[1]);
+	if (!arr) {
+		log('warn', 'Invalid http_proxy address "%s"', m[1]);
+		return null;
+	}
+
+	return { local: false, family: (length(arr) == 16) ? 6 : 4, address: arrtoip(arr), port };
+};
+
+function server_profile(s, preset) {
 	let login_by = filter(as_list(s.login_by ?? [ 'http-chap', 'cookie' ]), (m) => (m in LOGIN_METHODS));
+	let p = RADIUS_PRESETS[preset ?? 'mikrotik'];
 
 	return {
 		name: s.name ?? s['.name'],
@@ -33,8 +86,18 @@ function server_profile(s) {
 		// "received" = use Acct-Interim-Interval from the server, else a duration.
 		radius_interim_update: (s.radius_interim_update == null || s.radius_interim_update == 'received')
 			? 'received' : dur(s.radius_interim_update, '0'),
-		radius_mac_format: s.radius_mac_format ?? 'XX:XX:XX:XX:XX:XX',
+		radius_mac_format: s.radius_mac_format ?? p.mac_format,
+		// Called-Station-Id: server (hotspot server name, as RouterOS), mac
+		// (router MAC) or mac:server (CoovaChilli: "MAC:SSID").
+		radius_called_station: s.radius_called_station ?? p.called_station,
+		// Send Mikrotik-Host-IP (the client's address), as RouterOS does.
+		radius_host_ip: to_bool(s.radius_host_ip ?? (p.host_ip ? '1' : '0')),
 		nas_port_type: s.nas_port_type ?? 'wireless-802.11',
+		// MikroTik transparent-proxy / http-proxy: HTTP of logged-in clients goes
+		// through a proxy. http_proxy: empty or ":port" = a proxy on the router
+		// (default 3128), "ip:port" / "[ipv6]:port" = another host.
+		transparent_proxy: to_bool(s.transparent_proxy),
+		http_proxy: parse_proxy(s.http_proxy),
 		radius_location_id: s.radius_location_id ?? '',
 		radius_location_name: s.radius_location_name ?? '',
 	};
@@ -218,6 +281,24 @@ export function load(confdir) {
 			shaper: g.shaper ?? 'auto',
 			// Root class rate of the tc trees; keep above the real link speed.
 			shaper_capacity: parse_rate(g.shaper_capacity ?? '10G') || 10000000000,
+			// Capacity limits from the router's RAM/flash (capacity.uc): auto or off;
+			// mode safe / balanced / max; manual max_sessions / max_users win.
+			capacity: (g.capacity == 'off') ? 'off' : 'auto',
+			capacity_mode: g.capacity_mode ?? 'safe',
+			max_sessions: int(g.max_sessions ?? 0),
+			max_users: int(g.max_users ?? 0),
+			// Allow logins beyond max_sessions (logged as warnings).
+			capacity_override: to_bool(g.capacity_override ?? '0'),
+			// How RADIUS requests look (RADIUS_PRESETS above): mikrotik, coova or generic.
+			radius_preset: radius_preset(g.radius_preset ?? 'mikrotik'),
+			// RouterOS API subset for MikroTik billing systems (wrt-hotspot-radius).
+			// api_allow empty = only the RADIUS servers and localhost may connect.
+			api_enable: to_bool(g.api_enable ?? '0'),
+			api_port: int(g.api_port ?? 8728),
+			api_user: g.api_user ?? '',
+			api_password: g.api_password ?? '',
+			api_allow: as_list(g.api_allow),
+			api_version: g.api_version ?? '7.16',
 		},
 		servers: {},
 		radius: [],
@@ -231,7 +312,7 @@ export function load(confdir) {
 	// Profiles are usually anonymous sections with `option name`, because
 	// UCI section names must be unique across types and MikroTik calls both
 	// the default server profile and the default user profile "default".
-	c.foreach('wrthotspot', 'server_profile', (s) => { let p = server_profile(s); cfg.server_profiles[p.name] = p; });
+	c.foreach('wrthotspot', 'server_profile', (s) => { let p = server_profile(s, cfg.global.radius_preset); cfg.server_profiles[p.name] = p; });
 	c.foreach('wrthotspot', 'user_profile', (s) => { let p = user_profile(s); cfg.user_profiles[p.name] = p; });
 	c.foreach('wrthotspot', 'server', (s) => {
 		let srv = server(s);
@@ -307,7 +388,7 @@ export function load(confdir) {
 	});
 
 	// Always have defaults so a fresh install works.
-	cfg.server_profiles.default ??= server_profile({ '.name': 'default' });
+	cfg.server_profiles.default ??= server_profile({ '.name': 'default' }, cfg.global.radius_preset);
 	cfg.user_profiles.default ??= user_profile({ '.name': 'default' });
 
 	return cfg;

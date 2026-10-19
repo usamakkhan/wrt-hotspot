@@ -30,6 +30,18 @@ config global 'global'
 	option shaper 'auto'
 	# Root rate of the HTB trees; keep it above the real link speed.
 	option shaper_capacity '10G'
+	# How many sessions / local user accounts this router may carry, from its
+	# RAM and flash: auto or off. Modes: safe (largest free-memory buffer),
+	# balanced, max. Manual max_sessions / max_users replace the computed values.
+	option capacity 'auto'
+	option capacity_mode 'safe'
+	#option max_sessions '200'
+	#option max_users '2000'
+	# Let logins past max_sessions through (logged as warnings).
+	#option capacity_override '1'
+	# RADIUS request style: mikrotik (SAS4, Radius Manager, Splynx, daloRADIUS,
+	# User Manager), coova (RADIUSdesk, HotspotSystem) or generic.
+	#option radius_preset 'mikrotik'
 
 # RADIUS servers, tried in order. Used by server profiles with use_radius.
 #config radius 'main'
@@ -68,7 +80,10 @@ config server_profile
 	option radius_accounting '1'
 	# 'received' = Acct-Interim-Interval from the server, or a duration.
 	option radius_interim_update 'received'
-	option radius_mac_format 'XX:XX:XX:XX:XX:XX'
+	# Defaults come from the global radius_preset; set these to override it.
+	#option radius_mac_format 'XX:XX:XX:XX:XX:XX'
+	#option radius_called_station 'server'	# server, mac or mac:server
+	#option radius_host_ip '1'		# send Mikrotik-Host-IP
 	option nas_port_type 'wireless-802.11'
 	#option radius_location_id 'isocc=us,cc=1,ac=408,network=ACMEWISP_NewarkAirport'
 	#option radius_location_name 'Lobby'

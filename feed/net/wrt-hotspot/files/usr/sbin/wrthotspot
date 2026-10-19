@@ -7,7 +7,7 @@ import * as ubus from 'ubus';
 import { cursor } from 'uci';
 import { fmt_duration, fmt_bytes, run } from 'wrthotspot.util';
 import { run_checks } from 'wrthotspot.diag';
-import { load as load_config } from 'wrthotspot.config';
+import { load as load_config, parse_proxy } from 'wrthotspot.config';
 
 const USAGE = `Usage: wrthotspot <command> [args]
 
@@ -26,6 +26,7 @@ const USAGE = `Usage: wrthotspot <command> [args]
   vouchers                    voucher batches
   vouchers new <count> [k=v]  create a batch (profile=, length=, charset=, prefix=,
                               password=same|separate, validity=, price=, ...)
+                              force=1 (admin): add users beyond the capacity limit
   operators                   operator panel accounts
   operator add <user> <role>  create/update an account (role: operator|admin);
                               asks for the password on stdin
@@ -95,7 +96,7 @@ function kv_args(list) {
 			die(`Expected key=value, got "${a}"\n`);
 
 		let k = substr(a, 0, i), v = substr(a, i + 1);
-		out[k] = (k == 'disabled') ? (v == '1' || v == 'yes' || v == 'true') : v;
+		out[k] = (k == 'disabled' || k == 'force') ? (v == '1' || v == 'yes' || v == 'true') : v;
 	}
 
 	return out;
@@ -104,6 +105,8 @@ function kv_args(list) {
 function ok(res) {
 	if (res.ok === false)
 		die(`Error: ${res.error}\n`);
+	if (res.warning)
+		warn(`Warning: ${res.warning}\n`);
 	return res;
 }
 
@@ -161,6 +164,32 @@ function setup(net) {
 		{ name: 'DNS', proto: [ 'tcp', 'udp' ], dest_port: '53' },
 		{ name: 'Portal', proto: 'tcp', dest_port: `${port} ${int(port) + 1}` },
 	];
+
+	// A transparent proxy on the router needs its port open like the portal.
+	let proxy_ports = {};
+	c.foreach('wrthotspot', 'server_profile', (s) => {
+		let p = (s.transparent_proxy == '1') ? parse_proxy(s.http_proxy) : null;
+		if (p?.local)
+			proxy_ports[p.port] = true;
+	});
+
+	let proxy_rule = `Allow-${zone}-Proxy`;
+	let want_ports = join(' ', sort(keys(proxy_ports)));
+
+	let stale = [];
+	c.foreach('firewall', 'rule', (s) => {
+		if (s.name == proxy_rule && s.dest_port != want_ports)
+			push(stale, s['.name']);
+	});
+
+	for (let sid in stale)
+		c.delete('firewall', sid);
+
+	if (length(stale) && !length(want_ports))
+		print(`Removed rule ${proxy_rule}\n`);
+
+	if (length(want_ports))
+		push(rules, { name: 'Proxy', proto: 'tcp', dest_port: want_ports });
 
 	for (let r in rules) {
 		let name = `Allow-${zone}-${r.name}`;
@@ -277,6 +306,11 @@ switch (cmd) {
 case 'status':
 	let st = call('status');
 	print(`hotspotd ${st.version}: ${st.sessions} session(s), ${st.hosts} host(s), ${st.users} user(s)\n`);
+	let cp = st.capacity;
+	if (cp && cp.mode != 'off')
+		print(`  capacity: ${cp.tier?.label} RAM tier, ${cp.mode} mode: ${cp.sessions}/${cp.max_sessions} sessions, ` +
+			`${cp.users}/${cp.max_users} user accounts${cp.override ? ' (override on)' : ''}\n`);
+	print(`  RADIUS: ${st.radius ? 'installed' : 'not installed (local users only)'}\n`);
 	for (let dev, srv in st.devices)
 		print(`  server ${srv} on ${dev}\n`);
 	break;
