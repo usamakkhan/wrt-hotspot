@@ -15,6 +15,7 @@ const USER_ARGS = {
 	limit_uptime: '', limit_bytes_in: '', limit_bytes_out: '', limit_bytes_total: '',
 	disabled: false, comment: '', email: '',
 	validity: '', expires: '', price: '', batch: '',
+	force: false,	// admins: create beyond the capacity limit
 };
 
 // Lists are paged: a ubus message is limited to 1 MiB, which a few thousand
@@ -47,6 +48,13 @@ export function publish(conn, core) {
 			return 'root';
 
 		return conn.call('session', 'get', { ubus_rpc_session: sid })?.values?.username ?? '';
+	}
+
+	// Admins (LuCI root, panel admins, local ubus callers) may manage operators.
+	function is_admin(req) {
+		let sid = req.args.ubus_rpc_session;
+
+		return sid ? !!conn.call('session', 'access', { ubus_rpc_session: sid, scope: 'ubus', object: 'wrthotspot', function: 'operator_set' })?.access : true;
 	}
 
 	let methods = {
@@ -164,10 +172,7 @@ export function publish(conn, core) {
 		// Who am I (operator panel): login name and what the session may do.
 		whoami: {
 			call: function(req) {
-				let sid = req.args.ubus_rpc_session;
-				let admin = sid ? !!conn.call('session', 'access', { ubus_rpc_session: sid, scope: 'ubus', object: 'wrthotspot', function: 'operator_set' })?.access : true;
-
-				return { username: caller(req), admin };
+				return { username: caller(req), admin: is_admin(req) };
 			},
 		},
 
@@ -187,11 +192,17 @@ export function publish(conn, core) {
 			args: {
 				profile: '', count: 0, prefix: '', length: 0, charset: '', password: '', password_length: 0,
 				validity: '', limit_uptime: '', limit_bytes_total: '', limit_bytes_in: '', limit_bytes_out: '',
-				price: '', comment: '', server: '',
+				price: '', comment: '', server: '', force: false,
 			},
 			call: function(req) {
-				let res = vouchers.create(core.users(), req.args, caller(req), core.config().user_profiles);
-				return res[0] ? { ok: true, ...res[0] } : err(res[1]);
+				let who = caller(req);
+				let c = core.check_users(int(req.args.count ?? 0), req.args.force && is_admin(req), who);
+
+				if (!c[0])
+					return { ...err(c[1]), capacity: core.capacity() };
+
+				let res = vouchers.create(core.users(), req.args, who, core.config().user_profiles);
+				return res[0] ? { ok: true, ...res[0], warning: c[1] } : err(res[1]);
 			},
 		},
 
@@ -290,10 +301,20 @@ export function publish(conn, core) {
 			call: function(req) {
 				let a = { ...req.args };
 				let name = a.name;
+				let force = a.force;
 				delete a.name;
+				delete a.force;
+				delete a.ubus_rpc_session;
+
+				let c = [ true, null ];
+				if (!core.users().get(name))
+					c = core.check_users(1, force && is_admin(req), caller(req));
+
+				if (!c[0])
+					return { ...err(c[1]), capacity: core.capacity() };
 
 				let res = core.users().set(name, a);
-				return res[0] ? { ok: true, user: public_view(res[0]) } : err(res[1]);
+				return res[0] ? { ok: true, user: public_view(res[0]), warning: c[1] } : err(res[1]);
 			},
 		},
 

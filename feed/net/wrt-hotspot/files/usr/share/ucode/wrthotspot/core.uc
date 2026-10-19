@@ -7,17 +7,57 @@ import * as uloop from 'uloop';
 import { md5 } from 'digest';
 import * as nft from 'wrthotspot.nft';
 import * as dns from 'wrthotspot.dns';
-import * as radius from 'wrthotspot.radius';
 import * as shaper from 'wrthotspot.shaper';
 import * as sched from 'wrthotspot.limits';
 import * as users_db from 'wrthotspot.users';
 import * as hosts_mod from 'wrthotspot.hosts';
 import * as records_mod from 'wrthotspot.records';
+import * as capacity from 'wrthotspot.capacity';
+import { list as operators_list } from 'wrthotspot.operators';
 import { load as load_config } from 'wrthotspot.config';
 import {
 	log, set_log_level, normalize_mac, normalize_ip, random_bytes, random_hex, run,
 	read_json, write_atomic, mkdir_p, fmt_duration, fmt_bytes
 } from 'wrthotspot.util';
+
+// RADIUS lives in the optional wrt-hotspot-radius package (a script loaded
+// with require(), plus ucode-mod-socket/struct). Without it the hotspot runs
+// on local users only and RADIUS sections in the config are ignored.
+let radius = null;
+try {
+	radius = require('wrthotspot.radius');
+}
+catch (e) {
+	radius = null;
+
+	// Installed but broken (or a module missing) must not pass for "not installed".
+	if (!match(e.message, /No module named 'wrthotspot\.radius'/))
+		log('error', 'Cannot load RADIUS support: %s', e.message);
+}
+
+const NO_RADIUS = {
+	set_servers: () => null,
+	have_servers: () => false,
+	authenticate: (attrs, cb) => cb(null, 'RADIUS support is not installed'),
+	accounting: (attrs, cb) => cb?.(null, 'RADIUS support is not installed'),
+	backlog: () => 0,
+};
+
+export function radius_available() {
+	return radius != null;
+};
+
+// RouterOS API subset for billing systems; also in wrt-hotspot-radius.
+function load_rosapi() {
+	try {
+		return require('wrthotspot.rosapi');
+	}
+	catch (e) {
+		if (!match(e.message, /No module named 'wrthotspot\.rosapi'/))
+			log('error', 'Cannot load the RouterOS API: %s', e.message);
+		return null;
+	}
+}
 
 export const VERSION = '0.7.0';
 
@@ -71,13 +111,15 @@ export function create(opts) {
 	let records;			// session history + voucher sales
 	let need_rebuild = true;
 	let dev_info = {};		// dev -> { ip4 } (NAS-IP-Address)
-	let rad = radius.client();
+	let rad = radius ? radius.client() : NO_RADIUS;
 	let coa = null;
 	let setup_shaper, reapply_rates;	// defined below, used by self.reload
 	let shp = null;			// shaper backend: tc object, 'nft' or null (off)
 	let polls = 0;
 	let started = false;
 	let last_resync = 0;
+	let cap = null;			// capacity limits (capacity.uc); 0 = unlimited
+	let cap_warned = 0;
 	let last_rates = 0;
 	let try_mac_cookie;		// defined below, used by self.client
 	let auto_login;
@@ -301,6 +343,13 @@ export function create(opts) {
 	/* ---------- RADIUS: servers, CoA listener ---------- */
 
 	function setup_radius() {
+		if (!radius) {
+			if (length(cfg.radius))
+				log('warn', 'RADIUS servers are configured but wrt-hotspot-radius is not installed: using local users only');
+
+			return;
+		}
+
 		rad.set_servers(cfg.radius);
 
 		let want = (length(cfg.radius) && cfg.global.coa_port > 0) ? cfg.global.coa_port : 0;
@@ -327,6 +376,37 @@ export function create(opts) {
 			log('warn', 'RADIUS timeout x retries over all servers is %d ms; portal logins may time out', worst);
 	}
 
+	let api_srv = null;		// RouterOS API listener (rosapi.uc)
+
+	function operators_admins() {
+		return filter(operators_list(), (o) => o.role == 'admin');
+	}
+
+	function setup_api() {
+		let g = cfg.global;
+		let want = (g.api_enable && g.api_port > 0) ? g.api_port : 0;
+
+		if (api_srv && api_srv.port != want) {
+			api_srv.close();
+			api_srv = null;
+		}
+
+		if (!want || api_srv || opts?.no_api)
+			return;
+
+		let mod = load_rosapi();
+
+		if (!mod) {
+			log('warn', 'api_enable is set but the RouterOS API needs wrt-hotspot-radius');
+			return;
+		}
+
+		if (!length(g.api_password) && !length(operators_admins()))
+			log('warn', 'RouterOS API: set api_user / api_password (or create an admin operator) to log in');
+
+		api_srv = mod.server({ core: self, port: want, version: g.api_version });
+	}
+
 	function apply_dns() {
 		if (opts?.no_dns)
 			return;
@@ -337,6 +417,90 @@ export function create(opts) {
 		dns.apply_dnsmasq(cfg, devices);
 		dns.apply_odhcpd(cfg);
 	}
+
+	/* ---------- capacity ---------- */
+
+	function meminfo_kb(key) {
+		let m = match(fs.readfile('/proc/meminfo') ?? '', regexp(`${key}:[[:space:]]+([0-9]+)`));
+		return m ? int(m[1]) : 0;
+	}
+
+	// Free KiB on the filesystem holding the user database; null when it is
+	// in RAM (tmpfs), where flash does not limit the number of accounts.
+	function db_flash_free_kb() {
+		let out = run(`df -k ${cfg.global.db_dir} 2>/dev/null`).out ?? '';
+		let lines = filter(split(trim(out), '\n'), (l) => length(l));
+		let f = split(trim(lines[-1] ?? ''), /[[:space:]]+/);
+
+		if (length(f) < 6)
+			return null;
+
+		for (let m in split(fs.readfile('/proc/mounts') ?? '', '\n')) {
+			let mf = split(m, ' ');
+			if (mf[1] == f[5] && (mf[2] == 'tmpfs' || mf[2] == 'ramfs'))
+				return null;
+		}
+
+		return int(f[3]);
+	}
+
+	function setup_capacity() {
+		let g = cfg.global;
+
+		if (g.capacity == 'off') {
+			cap = { mode: 'off', max_sessions: g.max_sessions, max_users: g.max_users };
+			return;
+		}
+
+		cap = capacity.compute({
+			mem_total_kb: meminfo_kb('MemTotal'),
+			mem_avail_kb: meminfo_kb('MemAvailable'),
+			flash_free_kb: db_flash_free_kb(),
+			shaped: shp != null && shp != 'nft',
+			mode: g.capacity_mode,
+			sessions: length(keys(sessions)),
+			users: users ? users.count() : 0,
+			max_sessions: g.max_sessions,
+			max_users: g.max_users,
+		});
+
+		log('info', 'Capacity: %s RAM tier, %s mode: up to %d sessions and %d user accounts%s',
+			cap.tier.label, cap.mode, cap.max_sessions, cap.max_users,
+			g.capacity_override ? ' (override: logins beyond the limit are allowed)' : '');
+	}
+
+	self.capacity = function() {
+		let n = length(keys(sessions)), u = users.count();
+
+		return {
+			...(cap ?? { mode: 'off' }),
+			sessions: n, users: u,
+			override: cfg.global.capacity_override,
+			over_sessions: !!(cap?.max_sessions && n > cap.max_sessions),
+			over_users: !!(cap?.max_users && u > cap.max_users),
+		};
+	};
+
+	// Before adding `count` local accounts. Returns [ ok, message ]: refused
+	// beyond the limit unless forced (admins only, checked by the caller),
+	// then ok with a warning.
+	self.check_users = function(count, force, username) {
+		let lim = cap?.max_users;
+		let after = users.count() + count;
+
+		if (!lim || after <= lim)
+			return [ true, null ];
+
+		let what = sprintf('%d user accounts would exceed the %d this router can carry (%s RAM, %s mode)',
+			after, lim, cap.tier?.label ?? '?', cap.mode);
+
+		if (force) {
+			log('warn', 'Capacity override by %s: %s', username, what);
+			return [ true, `${what}; added anyway (override)` ];
+		}
+
+		return [ false, `${what}. An admin can override.` ];
+	};
 
 	self.reload = function() {
 		cfg = load_config(confdir);
@@ -349,7 +513,9 @@ export function create(opts) {
 			hosts.set_devices(devices);
 
 		setup_radius();
+		setup_api();
 		setup_shaper();
+		setup_capacity();
 
 		// Bindings and walled garden may have changed: always rebuild.
 		let err = self.rebuild();
@@ -375,8 +541,11 @@ export function create(opts) {
 
 		return {
 			shaper: (shp == null) ? 'off' : (shp == 'nft') ? 'nft' : 'tc',
+			radius: radius != null,
 			radius_backlog: rad.backlog(),
 			coa_listening: !!coa,
+			api: api_srv ? { port: api_srv.port, connections: api_srv.connections() } : null,
+			capacity: self.capacity(),
 			rss_kb: rss ? int(rss[1]) : null,
 			...perf,
 		};
@@ -607,14 +776,40 @@ export function create(opts) {
 		if ((v = lim('Xmit')) != null) a.bytes_out = v;
 		if ((v = lim('Total')) != null) a.bytes_total = v;
 
-		// Rate limit precedence as on MikroTik: Mikrotik-Rate-Limit, then WISPr.
+		// CoovaChilli octet limits, for servers made for ChilliSpot gateways.
+		let chilli = (name) => {
+			let o = radius.attr(pkt, `ChilliSpot-Max-${name}-Octets`), g = radius.attr(pkt, `ChilliSpot-Max-${name}-Gigawords`);
+			return (o != null || g != null) ? radius.join64(o, g) : null;
+		};
+
+		if (a.bytes_in == null && (v = chilli('Input')) != null) a.bytes_in = v;
+		if (a.bytes_out == null && (v = chilli('Output')) != null) a.bytes_out = v;
+		if (a.bytes_total == null && (v = chilli('Total')) != null) a.bytes_total = v;
+
+		// Rate limit precedence as on MikroTik: Mikrotik-Rate-Limit, then the
+		// standard bandwidth attributes (WISPr bit/s, ChilliSpot kbit/s, Ascend).
+		let w_up = radius.attr(pkt, 'WISPr-Bandwidth-Max-Up'), w_down = radius.attr(pkt, 'WISPr-Bandwidth-Max-Down');
+		let c_up = radius.attr(pkt, 'ChilliSpot-Bandwidth-Max-Up'), c_down = radius.attr(pkt, 'ChilliSpot-Bandwidth-Max-Down');
+
 		if ((v = radius.attr(pkt, 'Mikrotik-Rate-Limit')) != null) {
 			a.rate_limit = v;
 		}
+		else if (w_up != null || w_down != null) {
+			a.rate_limit = `${w_up ?? 0}/${w_down ?? 0}`;
+		}
+		else if (c_up != null || c_down != null) {
+			a.rate_limit = `${(c_up ?? 0) * 1000}/${(c_down ?? 0) * 1000}`;
+		}
 		else {
-			let up = radius.attr(pkt, 'WISPr-Bandwidth-Max-Up'), down = radius.attr(pkt, 'WISPr-Bandwidth-Max-Down');
-			if (up != null || down != null)
-				a.rate_limit = `${up ?? 0}/${down ?? 0}`;
+			// RouterOS: Ascend-Xmit-Rate = tx (download); with it Ascend-Data-Rate
+			// is rx, otherwise the first Ascend-Data-Rate is tx and a second one rx.
+			let data = radius.attr(pkt, 'Ascend-Data-Rate', true) ?? [];
+			let xmit = radius.attr(pkt, 'Ascend-Xmit-Rate');
+
+			if (xmit != null)
+				a.rate_limit = `${data[0] ?? 0}/${xmit}`;
+			else if (length(data))
+				a.rate_limit = `${data[1] ?? 0}/${data[0]}`;
 		}
 
 		if ((v = radius.parse_iso8601(radius.attr(pkt, 'WISPr-Session-Terminate-Time'))) != null)
@@ -653,6 +848,19 @@ export function create(opts) {
 		return limits;
 	}
 
+	// Called-Station-Id as the RADIUS preset wants it: the hotspot server
+	// name (RouterOS), or the router's MAC, optionally with ":server"
+	// (CoovaChilli's "MAC:SSID").
+	function called_station(sp, server, dev) {
+		if (sp.radius_called_station == 'server')
+			return server;
+
+		let mac = trim(fs.readfile(`/sys/class/net/${dev}/address`) ?? '');
+		mac = length(mac) ? radius.format_mac(mac, sp.radius_mac_format) : '';
+
+		return (sp.radius_called_station == 'mac') ? mac : `${mac}:${server}`;
+	}
+
 	// NAS/client attributes shared by Access-Request and accounting.
 	function nas_attrs(server, h, id, slot) {
 		let sp = server_profile_of(server);
@@ -663,8 +871,9 @@ export function create(opts) {
 			[ 'NAS-Port-Type', radius.NAS_PORT_TYPE[sp.nas_port_type] ?? 19 ],
 			[ 'NAS-Port-Id', h?.dev ],
 			[ 'Calling-Station-Id', radius.format_mac(h.mac, sp.radius_mac_format) ],
-			[ 'Called-Station-Id', server ],
+			[ 'Called-Station-Id', called_station(sp, server, h?.dev) ],
 			[ 'Framed-IP-Address', ip4 ],
+			[ 'Mikrotik-Host-IP', sp.radius_host_ip ? ip4 : null ],
 			[ 'Acct-Session-Id', id ],
 			[ 'WISPr-Location-ID', sp.radius_location_id || null ],
 			[ 'WISPr-Location-Name', sp.radius_location_name || null ],
@@ -968,6 +1177,20 @@ export function create(opts) {
 		let old = by_mac[mac];
 		if (old)
 			self.logout(old, CAUSE.NEW_LOGIN);
+
+		let n = length(keys(sessions));
+		if (cap?.max_sessions && n >= cap.max_sessions) {
+			let now = time();
+
+			if (now - cap_warned >= 60) {
+				cap_warned = now;
+				log('warn', 'Capacity: %d sessions, limit %d%s', n, cap.max_sessions,
+					cfg.global.capacity_override ? ' (override: login allowed)' : ' (logins refused)');
+			}
+
+			if (!cfg.global.capacity_override)
+				return [ null, 'the hotspot is full, please try again later' ];
+		}
 
 		let slot = alloc_slot();
 		if (!slot)
@@ -1654,11 +1877,13 @@ export function create(opts) {
 		hosts.set_devices(devices);
 		setup_radius();
 		restore();
+		setup_api();
 
 		let err = self.rebuild();
 		apply_dns();
 		setup_shaper();
 		reapply_rates();
+		setup_capacity();
 
 		started = true;
 

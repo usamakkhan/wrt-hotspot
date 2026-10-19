@@ -13,15 +13,17 @@ import * as struct from 'struct';
 import { md5 } from 'digest';
 import { random_bytes, log, ip_family } from 'wrthotspot.util';
 
-export const CODE = {
+const CODE = {
 	ACCESS_REQUEST: 1, ACCESS_ACCEPT: 2, ACCESS_REJECT: 3,
 	ACCOUNTING_REQUEST: 4, ACCOUNTING_RESPONSE: 5, ACCESS_CHALLENGE: 11,
 	DISCONNECT_REQUEST: 40, DISCONNECT_ACK: 41, DISCONNECT_NAK: 42,
 	COA_REQUEST: 43, COA_ACK: 44, COA_NAK: 45,
 };
 
-export const VENDOR_MIKROTIK = 14988;
-export const VENDOR_WISPR = 14122;
+const VENDOR_MIKROTIK = 14988;
+const VENDOR_WISPR = 14122;
+const VENDOR_CHILLISPOT = 14559;
+const VENDOR_ASCEND = 529;
 
 // name: [ vendor, id, type ]
 const DICT = {
@@ -92,6 +94,22 @@ const DICT = {
 	'WISPr-Session-Terminate-Time': [ VENDOR_WISPR, 9, 'string' ],
 	'WISPr-Session-Terminate-End-Of-Day': [ VENDOR_WISPR, 10, 'integer' ],
 	'WISPr-Billing-Class-Of-Service': [ VENDOR_WISPR, 11, 'string' ],
+
+	// CoovaChilli / ChilliSpot (RADIUSdesk, HotspotSystem and other UAM
+	// billing systems). Bandwidth in kbit/s, octet limits with gigawords.
+	'ChilliSpot-Max-Input-Octets': [ VENDOR_CHILLISPOT, 1, 'integer' ],
+	'ChilliSpot-Max-Output-Octets': [ VENDOR_CHILLISPOT, 2, 'integer' ],
+	'ChilliSpot-Max-Total-Octets': [ VENDOR_CHILLISPOT, 3, 'integer' ],
+	'ChilliSpot-Bandwidth-Max-Up': [ VENDOR_CHILLISPOT, 4, 'integer' ],
+	'ChilliSpot-Bandwidth-Max-Down': [ VENDOR_CHILLISPOT, 5, 'integer' ],
+	'ChilliSpot-Version': [ VENDOR_CHILLISPOT, 8, 'string' ],
+	'ChilliSpot-Max-Input-Gigawords': [ VENDOR_CHILLISPOT, 21, 'integer' ],
+	'ChilliSpot-Max-Output-Gigawords': [ VENDOR_CHILLISPOT, 22, 'integer' ],
+	'ChilliSpot-Max-Total-Gigawords': [ VENDOR_CHILLISPOT, 23, 'integer' ],
+
+	// Ascend rates (bit/s), honoured by RouterOS when Mikrotik-Rate-Limit is absent.
+	'Ascend-Data-Rate': [ VENDOR_ASCEND, 197, 'integer' ],
+	'Ascend-Xmit-Rate': [ VENDOR_ASCEND, 255, 'integer' ],
 };
 
 // "vendor:id" -> name
@@ -100,18 +118,18 @@ for (let name, d in DICT)
 	BY_ID[`${d[0]}:${d[1]}`] = name;
 
 // RFC 2866 Acct-Status-Type / Acct-Terminate-Cause.
-export const ACCT_START = 1;
-export const ACCT_STOP = 2;
-export const ACCT_INTERIM = 3;
+const ACCT_START = 1;
+const ACCT_STOP = 2;
+const ACCT_INTERIM = 3;
 
-export const TERMINATE_CAUSE = {
+const TERMINATE_CAUSE = {
 	'user-request': 1, 'lost-carrier': 2, 'keepalive-timeout': 2, 'idle-timeout': 4,
 	'session-timeout': 5, 'uptime-limit': 5, 'admin-reset': 6, 'user-removed': 6,
 	'traffic-limit': 10, 'nas-request': 10, 'nas-reboot': 11, 'new-login': 13,
 };
 
 // NAS-Port-Type names as in MikroTik's nas-port-type setting.
-export const NAS_PORT_TYPE = { 'async': 0, 'sync': 1, 'virtual': 5, 'ethernet': 15, 'wireless-802.11': 19 };
+const NAS_PORT_TYPE = { 'async': 0, 'sync': 1, 'virtual': 5, 'ethernet': 15, 'wireless-802.11': 19 };
 
 /* ---------- primitives ---------- */
 
@@ -136,7 +154,7 @@ function zeros(n) {
 }
 
 // HMAC-MD5 (RFC 2104), built from two MD5 calls.
-export function hmac_md5(key, msg) {
+function hmac_md5(key, msg) {
 	if (length(key) > 64)
 		key = bin_md5(key);
 
@@ -152,7 +170,7 @@ export function hmac_md5(key, msg) {
 };
 
 // RFC 2865 5.2 User-Password hiding (also used to reveal it in tests).
-export function hide_password(password, secret, authenticator) {
+function hide_password(password, secret, authenticator) {
 	let p = password;
 	let pad = (16 - (length(p) % 16)) % 16;
 
@@ -172,7 +190,7 @@ export function hide_password(password, secret, authenticator) {
 	return out;
 };
 
-export function unhide_password(hidden, secret, authenticator) {
+function unhide_password(hidden, secret, authenticator) {
 	let out = '', prev = authenticator;
 
 	for (let i = 0; i < length(hidden); i += 16) {
@@ -260,7 +278,7 @@ function encode_attr(name, value) {
 }
 
 // attrs: [ [ name, value ], ... ]  -> wire bytes
-export function encode_attrs(attrs) {
+function encode_attrs(attrs) {
 	let out = '';
 
 	for (let a in attrs)
@@ -271,7 +289,7 @@ export function encode_attrs(attrs) {
 };
 
 // -> [ { name, vendor, id, value, raw } ]
-export function decode_attrs(buf) {
+function decode_attrs(buf) {
 	let out = [];
 	let pos = 0;
 
@@ -329,7 +347,7 @@ function sign_message_auth(code, id, attrs_bin, auth, secret) {
 }
 
 // Access-Request: random authenticator; passwords hidden with it.
-export function access_request(id, attrs, secret) {
+function access_request(id, attrs, secret) {
 	let auth = random_bytes(16);
 	let list = [];
 
@@ -345,7 +363,7 @@ export function access_request(id, attrs, secret) {
 };
 
 // Accounting-Request / CoA / Disconnect requests: MD5(header with zero auth + attrs + secret).
-export function signed_request(code, id, attrs, secret, with_ma) {
+function signed_request(code, id, attrs, secret, with_ma) {
 	let body = encode_attrs(attrs);
 
 	if (with_ma)
@@ -358,7 +376,7 @@ export function signed_request(code, id, attrs, secret, with_ma) {
 };
 
 // Responses (Access-Accept/Reject, Accounting-Response, CoA/Disconnect ACK/NAK).
-export function response(code, id, req_auth, attrs, secret) {
+function response(code, id, req_auth, attrs, secret) {
 	let body = sign_message_auth(code, id, encode_attrs(attrs), req_auth, secret);
 	let len = 20 + length(body);
 	let auth = bin_md5(header(code, id, len, req_auth) + body + secret);
@@ -367,7 +385,7 @@ export function response(code, id, req_auth, attrs, secret) {
 };
 
 // -> { code, id, auth, attrs } or null for garbage
-export function parse(buf) {
+function parse(buf) {
 	if (length(buf) < 20)
 		return null;
 
@@ -386,7 +404,7 @@ export function parse(buf) {
 };
 
 // First value of an attribute, or all values with `all`.
-export function attr(pkt, name, all) {
+function attr(pkt, name, all) {
 	let vals = map(filter(pkt.attrs, (a) => a.name == name), (a) => a.value);
 	return all ? vals : vals[0];
 };
@@ -420,7 +438,7 @@ function verify_message_auth(pkt, auth_for_hmac, secret, required) {
 }
 
 // Response to one of our requests.
-export function verify_response(pkt, req_auth, secret, require_ma) {
+function verify_response(pkt, req_auth, secret, require_ma) {
 	let expect = bin_md5(substr(pkt.raw, 0, 4) + req_auth + substr(pkt.raw, 20) + secret);
 
 	if (expect !== pkt.auth)
@@ -430,7 +448,7 @@ export function verify_response(pkt, req_auth, secret, require_ma) {
 };
 
 // Accounting/CoA/Disconnect request received or sent.
-export function verify_signed_request(pkt, secret, require_ma) {
+function verify_signed_request(pkt, secret, require_ma) {
 	let expect = bin_md5(substr(pkt.raw, 0, 4) + zeros(16) + substr(pkt.raw, 20) + secret);
 
 	if (expect !== pkt.auth)
@@ -442,17 +460,17 @@ export function verify_signed_request(pkt, secret, require_ma) {
 /* ---------- helpers for callers ---------- */
 
 // 64-bit counters -> [ octets, gigawords ]
-export function split64(n) {
+function split64(n) {
 	n = int(n ?? 0);
 	return [ n % 4294967296, int(n / 4294967296) ];
 };
 
-export function join64(octets, gigawords) {
+function join64(octets, gigawords) {
 	return int(octets ?? 0) + int(gigawords ?? 0) * 4294967296;
 };
 
 // MikroTik radius-mac-format: "XX:XX:XX:XX:XX:XX", "xx-xx-...", "XXXXXXXXXXXX", "XXXX.XXXX.XXXX", ...
-export function format_mac(mac, fmt) {
+function format_mac(mac, fmt) {
 	let hex = replace(mac, /:/g, '');
 	let out = '', j = 0;
 
@@ -482,7 +500,7 @@ function days_from_civil(y, m, d) {
 }
 
 // WISPr-Session-Terminate-Time: ISO 8601, e.g. "2026-10-18T20:00:00+05:00".
-export function parse_iso8601(s) {
+function parse_iso8601(s) {
 	let m = match(s ?? '', /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(Z|([+-])(\d{2}):?(\d{2}))?$/);
 
 	if (!m)
@@ -513,7 +531,7 @@ function same_peer(from, address, port) {
 }
 
 // servers: [ { address, secret, auth_port, acct_port, timeout (ms), retries, require_message_auth } ]
-export function client() {
+function client() {
 	let servers = [];
 	let sock = null, handle = null;
 	let pending = {};		// id -> request
@@ -687,7 +705,7 @@ export function client() {
 /* ---------- CoA / Disconnect listener (RFC 5176) ---------- */
 
 // handler(pkt, srv) -> [ code, attrs ]   (srv = the configured server it came from)
-export function coa_server(port, servers_fn, handler) {
+function coa_server(port, servers_fn, handler) {
 	let s = socket.create(socket.AF_INET6, socket.SOCK_DGRAM | socket.SOCK_NONBLOCK);
 
 	if (!s) {
@@ -742,4 +760,15 @@ export function coa_server(port, servers_fn, handler) {
 	}, uloop.ULOOP_READ);
 
 	return { close: () => { h.delete(); s.close(); } };
+};
+
+// Loaded with require() by the core, so that the RADIUS package is optional.
+return {
+	CODE, VENDOR_MIKROTIK, VENDOR_WISPR, ACCT_START, ACCT_STOP, ACCT_INTERIM,
+	TERMINATE_CAUSE, NAS_PORT_TYPE,
+	hmac_md5, hide_password, unhide_password, encode_attrs, decode_attrs,
+	access_request, signed_request, response, parse, attr,
+	verify_response, verify_signed_request,
+	split64, join64, format_mac, parse_iso8601,
+	client, coa_server,
 };

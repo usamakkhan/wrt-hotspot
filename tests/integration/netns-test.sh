@@ -482,12 +482,24 @@ ATTRIBUTE	Mikrotik-Recv-Limit		1	integer
 ATTRIBUTE	Mikrotik-Xmit-Limit		2	integer
 ATTRIBUTE	Mikrotik-Group			3	string
 ATTRIBUTE	Mikrotik-Rate-Limit		8	string
+ATTRIBUTE	Mikrotik-Host-IP		10	ipaddr
 ATTRIBUTE	Mikrotik-Recv-Limit-Gigawords	14	integer
 ATTRIBUTE	Mikrotik-Xmit-Limit-Gigawords	15	integer
 ATTRIBUTE	Mikrotik-Total-Limit		17	integer
 ATTRIBUTE	Mikrotik-Total-Limit-Gigawords	18	integer
 ATTRIBUTE	Mikrotik-Address-List		19	string
 END-VENDOR	Mikrotik
+VENDOR		ChilliSpot			14559
+BEGIN-VENDOR	ChilliSpot
+ATTRIBUTE	ChilliSpot-Max-Total-Octets	3	integer
+ATTRIBUTE	ChilliSpot-Bandwidth-Max-Up	4	integer
+ATTRIBUTE	ChilliSpot-Bandwidth-Max-Down	5	integer
+END-VENDOR	ChilliSpot
+VENDOR		Ascend				529
+BEGIN-VENDOR	Ascend
+ATTRIBUTE	Ascend-Data-Rate		197	integer
+ATTRIBUTE	Ascend-Xmit-Rate		255	integer
+END-VENDOR	Ascend
 EOF
 	soon=$(date -u -d @$(( $(date +%s) + 25 )) +%Y-%m-%dT%H:%M:%SZ)
 	{ cat <<EOF
@@ -505,6 +517,13 @@ radgroup Cleartext-Password := "x"
 	Mikrotik-Group = "idleprof"
 radwispr Cleartext-Password := "x"
 	WISPr-Session-Terminate-Time = "$soon"
+radchilli Cleartext-Password := "x"
+	ChilliSpot-Bandwidth-Max-Up = 512,
+	ChilliSpot-Bandwidth-Max-Down = 2048,
+	ChilliSpot-Max-Total-Octets = 5000000
+radascend Cleartext-Password := "x"
+	Ascend-Data-Rate = 256000,
+	Ascend-Xmit-Rate = 1000000
 radbad Auth-Type := Reject
 	Reply-Message = "Account suspended"
 "02:00:00:00:99:10" Cleartext-Password := "macsecret"
@@ -589,6 +608,33 @@ EOF
 	post_has 'username=radwispr&password=x' 'You are connected'
 	check "WISPr-Session-Terminate-Time applied" sh -c "t=\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radwispr'].limits.max_uptime\"); [ \$t -gt 0 ] && [ \$t -le 26 ]"
 	wrthotspot logout radwispr >/dev/null
+
+	# Third-party servers: CoovaChilli and Ascend attributes, presets.
+	post_has 'username=radchilli&password=x' 'You are connected'
+	check "ChilliSpot bandwidth (kbit/s) becomes the rate limit" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radchilli'].rate_limit\")\" = 512000/2048000 ]"
+	check "ChilliSpot-Max-Total-Octets applied" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radchilli'].limits.bytes_total\")\" = 5000000 ]"
+	wrthotspot logout radchilli >/dev/null
+	post_has 'username=radascend&password=x' 'You are connected'
+	check "Ascend-Data-Rate / Ascend-Xmit-Rate become the rate limit" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radascend'].rate_limit\")\" = 256000/1000000 ]"
+	wrthotspot logout radascend >/dev/null
+	check "mikrotik preset sends Mikrotik-Host-IP and server name" sh -c "cat $ACCT/detail-* | grep -q 'Mikrotik-Host-IP = 10.99.0.10' && cat $ACCT/detail-* | grep -q 'Called-Station-Id = \"hstest\"'"
+
+	fmt=$(uci -q get wrthotspot.@server_profile[0].radius_mac_format)
+	uci -q delete wrthotspot.@server_profile[0].radius_mac_format	# let the preset decide
+	uci set wrthotspot.global.radius_preset=coova
+	uci commit wrthotspot
+	reload_hs
+	post_has 'username=radalice&password=radpw' 'You are connected'
+	sleep 1
+	wrthotspot logout radalice >/dev/null
+	sleep 1
+	bmac=$(tr 'a-f:' 'A-F-' < /sys/class/net/br-hstest/address)
+	check "coova preset: Calling-Station-Id with dashes" sh -c "cat $ACCT/detail-* | grep -q 'Calling-Station-Id = \"02-00-00-00-99-10\"'"
+	check "coova preset: Called-Station-Id = router MAC:server" sh -c "cat $ACCT/detail-* | grep -q 'Called-Station-Id = \"$bmac:hstest\"'"
+	uci -q delete wrthotspot.global.radius_preset
+	[ -n "$fmt" ] && uci set wrthotspot.@server_profile[0].radius_mac_format="$fmt"
+	uci commit wrthotspot
+	reload_hs
 
 	wrthotspot cookie del 02:00:00:00:99:10 >/dev/null
 	uci set wrthotspot.@server_profile[0].mac_auth_password=macsecret
