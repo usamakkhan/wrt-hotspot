@@ -65,6 +65,12 @@ export function compute(o) {
 		users = min(users, int(flash / COST.user_flash));
 	}
 
+	// A limit of 0 means "unlimited" to the callers: a router without any
+	// budget left gets the smallest real limit instead of none at all.
+	let exhausted = sessions < 1;
+	sessions = max(1, sessions);
+	users = max(1, users);
+
 	return {
 		tier: tier(o.mem_total_kb),
 		mode,
@@ -75,5 +81,6 @@ export function compute(o) {
 		max_users: (o.max_users > 0) ? o.max_users : users,
 		auto_sessions: sessions,
 		auto_users: users,
+		exhausted,
 	};
 };

@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixes (found on emulated MIPS and ARM routers)
+
+- **OpenWrt 24.10: RADIUS, CoA and the RouterOS API did not work.** Their sockets were bound with a `[::]:port` address string, which ucode-mod-socket on 24.10 cannot parse, so no RADIUS request was ever sent and nothing listened on 3799 or 8728. Addresses are now passed as objects, which both releases accept.
+- **A router already short of memory got no session limit at all.** When the free memory was below the capacity reserve, the computed limit was 0, which means "unlimited". Such a router now gets a limit of 1 (raise it with `capacity_mode`, `max_sessions` or `capacity_override`), and the daemon logs a warning saying why.
+
+### Tests
+
+- `tests/emu/emu.sh` boots OpenWrt in QEMU (MIPS 24Kc big-endian with 128 MB on 25.12 and 24.10, ARM Cortex-A53), installs the release feed as the README says, and runs every suite there. See [docs/qualification.md](docs/qualification.md#emulated-routers-qemu).
+- The netns test brings its own minimal FreeRADIUS site, so it needs only the files, pap, chap and detail modules.
+- Fewer fixed sleeps in the tests: the regression test waits for the daemon after a restart, and the CoA check polls.
+- Package builds copy the feed (`src-cpy`), so package metadata no longer shows the build machine's path.
+
 ## 0.8.1 — 2026-10-20
 
 Bug-fix release from a full review of 0.8.0. Upgrading is recommended for everyone.

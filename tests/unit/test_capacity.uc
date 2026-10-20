@@ -38,9 +38,14 @@ eq(c.reserve_kb, 17700, 'tiny router reserve');
 eq(c.max_sessions, 51, 'tiny router sessions');
 ok(c.max_users >= c.max_sessions, 'at least one account per session');
 
-// Out of memory already: nothing left, not negative.
+// Out of memory already: nothing left, not negative, and still a real limit
+// (0 would mean "unlimited" to the callers).
 c = cap.compute({ mem_total_kb: 59000, mem_avail_kb: 8000, shaped: false, mode: 'safe' });
-eq([ c.budget_kb, c.max_sessions ], [ 0, 0 ], 'no budget');
+eq([ c.budget_kb, c.max_sessions, c.max_users ], [ 0, 1, 1 ], 'no budget: limit 1, never 0');
+ok(c.exhausted, 'no budget is flagged');
+ok(!cap.compute({ mem_total_kb: 123000, mem_avail_kb: 75000, shaped: true, mode: 'safe' }).exhausted, 'normal budget not flagged');
+c = cap.compute({ mem_total_kb: 123000, mem_avail_kb: 75000, flash_free_kb: 0, shaped: true, mode: 'safe' });
+eq(c.max_users, 1, 'no flash left: accounts limited to 1, never 0');
 
 // max mode on the 236 MB test VM.
 eq(cap.compute({ mem_total_kb: 236776, mem_avail_kb: 140000, shaped: true, mode: 'max' }).max_sessions, 1554, 'max mode');

@@ -31,7 +31,7 @@ jobs:
       - name: shell scripts
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck -s sh -S error scripts/*.sh tests/run-unit.sh tests/integration/*.sh \
+          shellcheck -s sh -S error scripts/*.sh tests/run-unit.sh tests/integration/*.sh tests/emu/*.sh \
             feed/net/wrt-hotspot/files/etc/init.d/wrthotspot
       - name: scripts are executable
         # Commits from Windows (core.fileMode=false) lose the x bit.

@@ -262,7 +262,8 @@ function server(opts) {
 	lsock.setopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, false);
 	lsock.setopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, true);
 
-	if (!lsock.bind(`[::]:${opts.port}`) || !lsock.listen(8)) {
+	// Object address: OpenWrt 24.10's socket module cannot parse "[::]:port".
+	if (!lsock.bind({ family: socket.AF_INET6, address: '::', port: +opts.port }) || !lsock.listen(8)) {
 		log('error', 'API: cannot listen on port %d: %s', opts.port, socket.error());
 		lsock.close();
 		return null;

@@ -518,9 +518,15 @@ function parse_iso8601(s) {
 
 /* ---------- client ---------- */
 
+// Socket addresses are passed as objects: the "[addr]:port" string form is
+// not parsed by ucode-mod-socket on OpenWrt 24.10.
+function sockaddr6(address, port) {
+	return { family: socket.AF_INET6, address, port: +port };
+}
+
 function server_addr(address, port) {
 	// One dual-stack AF_INET6 socket: IPv4 servers become v4-mapped.
-	return (ip_family(address) == 6) ? `[${address}]:${port}` : `[::ffff:${address}]:${port}`;
+	return sockaddr6((ip_family(address) == 6) ? address : `::ffff:${address}`, port);
 }
 
 function same_peer(from, address, port) {
@@ -598,7 +604,12 @@ function client() {
 		}
 
 		sock.setopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, false);
-		sock.bind('[::]:0');
+		if (!sock.bind(sockaddr6('::', 0))) {
+			log('error', 'RADIUS: cannot bind socket: %s', socket.error());
+			sock.close();
+			sock = null;
+			return false;
+		}
 
 		handle = uloop.handle(sock.fileno(), () => {
 			while (true) {
@@ -739,7 +750,7 @@ function coa_server(port, servers_fn, handler) {
 	s.setopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, false);
 	s.setopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, true);
 
-	if (!s.bind(`[::]:${port}`)) {
+	if (!s.bind(sockaddr6('::', port))) {
 		log('error', 'CoA: cannot bind port %d: %s', port, socket.error());
 		s.close();
 		return null;
@@ -777,7 +788,7 @@ function coa_server(port, servers_fn, handler) {
 				continue;
 			}
 
-			let to = (ip_family(addr) == 6) ? `[${addr}]:${from.port}` : `[::ffff:${addr}]:${from.port}`;
+			let to = server_addr(addr, from.port);
 			let now = time();
 
 			// RFC 5176 3.5: a request outside the replay window is discarded.

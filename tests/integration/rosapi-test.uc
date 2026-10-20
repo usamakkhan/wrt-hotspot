@@ -25,7 +25,8 @@ function sh(cmd) {
 
 function connect() {
 	let s = socket.create(socket.AF_INET, socket.SOCK_STREAM);
-	if (!s.connect('127.0.0.1:8728'))
+	// Object address: 24.10's socket module parses no "addr:port" strings.
+	if (!s.connect({ family: socket.AF_INET, address: '127.0.0.1', port: 8728 }))
 		return null;
 	s.setopt(socket.SOL_SOCKET, socket.SO_RCVTIMEO, { sec: 5, usec: 0 });
 	return { s, buf: '' };

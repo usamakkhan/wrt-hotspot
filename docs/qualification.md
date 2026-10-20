@@ -142,7 +142,56 @@ once (a lecture hall, a bus) costs `portal_max_requests` × ~0.4 MB at peak; low
 Logging: every login/logout is logged at `info`. With hundreds of logins a minute the default 64 KiB
 logread ring wraps quickly — use remote syslog or raise `log_size` on busy sites.
 
+## Emulated routers (QEMU)
+
+Status 2026-10-20. OpenWrt's own QEMU targets run the real release images of other CPUs:
+`malta/be` is a big-endian MIPS 24Kc like most older routers, `armsr/armv8` a 64-bit ARM. Each
+router installed `wrt-hotspot-full` from the public release feed with the README's commands, then
+ran the unit tests and every integration suite. The host was WSL2 (Ubuntu 24.04, QEMU 8.2) on a
+4-core PC.
+
+| Router | CPU | RAM | Install from the feed | Unit | netns | regression | capacity | panel API | RouterOS API |
+|---|---|---|---|---|---|---|---|---|---|
+| OpenWrt 25.12.6 malta | MIPS 24Kc BE | 128 MB | apk, 31 s | all | 154 / 154 | 24 / 24 | 16 / 16 | 53 / 53 | 34 / 34 |
+| OpenWrt 24.10.8 malta | MIPS 24Kc BE | 128 MB | opkg, 45 s, every signature verified | all | 154 / 154 | 24 / 24 | 16 / 16 | 53 / 53 | 34 / 34 |
+| OpenWrt 25.12.6 armsr | ARM Cortex-A53, 2 cores | 256 MB | apk, 58 s | all | 154 / 154 | 24 / 24 | 16 / 16 | 53 / 53 | 34 / 34 |
+
+An armv7 router (Cortex-A15, 25.12.6) also ran regression, capacity and panel API cleanly.
+A MIPS netns run takes about 6½ minutes, the whole set about 10.
+
+With the full package set, FreeRADIUS and the test tools installed, the 128 MB routers still had
+25–40 MB available. Big-endian MIPS matters for RADIUS: attribute encoding, Message-Authenticator and
+the RouterOS API word lengths all pass there.
+
+### Found and fixed
+
+| Found on | Problem | Fix |
+|---|---|---|
+| 24.10 (MIPS) | RADIUS, CoA and the RouterOS API were dead: ucode-mod-socket 2025.07 cannot parse the `[::]:port` address string, so the RADIUS socket was never bound and nothing listened on 3799 or 8728. x86 CI never opened a socket. | Socket addresses passed as objects, which both releases accept |
+| 128 MB, little memory free | The computed session limit was 0, which every caller reads as "unlimited": the most starved router had no limit at all | Auto limits never go below 1; the daemon logs a warning naming the reserve and the options |
+| all | The package origin showed the build host's path (`/home/kali/...`) | The build copies the feed (`src-cpy`) |
+| slow CPUs | Fixed sleeps in the tests (restart, DNS, CoA and Disconnect) | The tests wait for the daemon and poll; radclient retries |
+| 24.10 | radiusd crash-loops without OpenSSL's legacy provider (test setup only) | `libopenssl-legacy` added to the test tools |
+
+### How to run it
+
+```sh
+sh tests/emu/emu.sh fetch                 # images into ~/.cache/wrthotspot-emu
+sh tests/emu/emu.sh boot malta &          # or malta24, armv8, armv7
+sh tests/emu/emu.sh all malta             # setup, install from the feed, test tools, suites
+sh tests/emu/emu.sh status malta          # results (the MIPS run takes ~10 min)
+sh tests/emu/emu.sh deploy malta          # try changed ucode files before a release
+```
+
+Initramfs images keep the whole root in RAM, including ~30 MB of test tools that a real router
+would keep on flash. So the suites run with `capacity_mode max`; the default safe mode is covered
+by the unit tests and `capacity-test.sh`.
+
+What emulation can't show: switch chips, Wi-Fi drivers, flash wear and real CPU speed. TCG emulation
+is several times slower than a real 24Kc, so timings and iperf3 rates from it aren't meaningful.
+
 ## Still open
 
-- Real MIPS 24Kc, MT7621 and IPQ40xx routers: memory, poll time and HTB throughput on each.
+- Real MIPS 24Kc, MT7621 and IPQ40xx routers: memory, poll time and HTB throughput on each
+  (the code itself now passes on emulated MIPS and ARM, see above).
 - Real Wi-Fi clients (Android, iOS, Windows, macOS captive-portal assistants) end to end.

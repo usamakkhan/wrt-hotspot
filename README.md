@@ -6,7 +6,8 @@ vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 Status: **0.8.1 — Phases 1–8 working, qualified on x86**: tested end to end on OpenWrt 25.12.5 x86-64
 against FreeRADIUS 3.2.10 (154 + 53 + 16 + 34 + 24 + 12 end-to-end checks), rates measured by iperf3, 2000 sessions on one 236 MB VM and
 150 simultaneous real clients through the portal, upgrades from 0.7.0 through the signed feed. Packages
-build with the official 24.10 (ipk) and 25.12 (apk) SDKs. Physical MIPS/ARM routers are still to be tested.
+build with the official 24.10 (ipk) and 25.12 (apk) SDKs. The unit tests and the end-to-end suites also run on
+emulated MIPS (big-endian, 128 MB) and ARM routers in QEMU (`tests/emu/`); physical routers are still to be tested.
 
 - Source: [github.com/usamakkhan/wrt-hotspot](https://github.com/usamakkhan/wrt-hotspot) ([releases](https://github.com/usamakkhan/wrt-hotspot/releases), [issues](https://github.com/usamakkhan/wrt-hotspot/issues))
 - [docs/research.md](docs/research.md) — stack, prior art, dataplane and feature research
@@ -118,6 +119,7 @@ scripts/build-packages.sh       builds all packages with the official SDK of a r
 tests/unit/                     ucode unit tests        (sh tests/run-unit.sh)
 tests/integration/              end-to-end netns test   (sh tests/integration/netns-test.sh),
                                 panel API test, 2000-session load test, real-traffic test
+tests/emu/                      OpenWrt on emulated MIPS/ARM in QEMU: install from the feed, run the suites
 ```
 
 ## Build the packages

@@ -54,7 +54,11 @@ check "code uses prefix and digits" sh -c "echo '$code' | grep -qE '^T[0-9]{6}$'
 check "batch listed, none used" [ "$(ub_val voucher_batches '{}' "@.batches[@.batch='$batch'].used")" = 0 ]
 check "voucher_list gives printable codes" ub_has voucher_list "{\"batch\":\"$batch\"}" "$code"
 check_not "bad charset rejected" ub_has voucher_create '{"count":1,"charset":"klingon"}' '"ok": true'
+# 1000 accounts exceed a small router's capacity, which is checked first:
+# lift the account limit so that the code-space check is reached.
+uci set wrthotspot.global.max_users=100000; uci commit wrthotspot; ubus call wrthotspot reload >/dev/null; sleep 1
 check "too small code space rejected" ub_has voucher_create '{"count":1000,"length":4,"charset":"digits"}' 'code space'
+uci -q delete wrthotspot.global.max_users; uci commit wrthotspot; ubus call wrthotspot reload >/dev/null; sleep 1
 
 check "voucher logs in with the code alone (empty password)" portal_login_has "$code" "" 'You are connected'
 check "online with voucher" online4

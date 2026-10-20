@@ -7,7 +7,9 @@
 #  hsblocked 02:..:99:30 --+   [hotspot "hstest"]  hsi0p 10.98.0.1 fd98::1
 #
 # Needs ip-full, kmod-veth, curl (and dnsmasq-full + libustream-* for the
-# nftset / HTTPS parts). The router's network/firewall/dhcp/wrthotspot configs
+# nftset / HTTPS parts; freeradius3 with -mod-files, -mod-pap, -mod-chap,
+# -mod-detail and freeradius3-utils for the RADIUS part; on 24.10 radiusd also
+# needs libopenssl-legacy). The router's network/firewall/dhcp/wrthotspot configs
 # are backed up first and restored afterwards.
 #
 # Usage: netns-test.sh [keep|cleanup]
@@ -76,6 +78,10 @@ cleanup() {
 		for c in $CONFIGS; do cp $BK/$c /etc/config/$c; done
 		[ -f $BK/fr-dictionary ] && cp $BK/fr-dictionary /etc/freeradius3/dictionary
 		[ -f $BK/fr-authorize ] && cp $BK/fr-authorize /etc/freeradius3/mods-config/files/authorize
+		if [ -d $BK/fr-sites ]; then
+			rm -f /etc/freeradius3/sites-enabled/*
+			cp -a $BK/fr-sites/. /etc/freeradius3/sites-enabled/
+		fi
 		rm -rf $BK
 	fi
 	[ -x /etc/init.d/radiusd ] && /etc/init.d/radiusd stop 2>/dev/null
@@ -115,6 +121,8 @@ setup() {
 	for c in $CONFIGS; do cp /etc/config/$c $BK/$c; done
 	# Always start from the package's default hotspot config.
 	cp "$(dirname "$0")/../../feed/net/wrt-hotspot/files/etc/config/wrthotspot" /etc/config/wrthotspot
+	# Emulated routers keep their root in RAM and need a looser capacity mode.
+	[ -n "$HS_CAPACITY_MODE" ] && uci set wrthotspot.global.capacity_mode="$HS_CAPACITY_MODE"
 
 	uci set network.br_hstest=device
 	uci set network.br_hstest.type=bridge
@@ -251,8 +259,10 @@ check_not "IPv6 ping blocked" C ping -6 -c1 -W1 fd98::2
 check "RFC 8908 API says captive" page_has "$P/api/captive" '"captive": true'
 check "host learned with IPv6 address" sh -c "wrthotspot hosts | grep 02:00:00:00:99:10 | grep -q fd99::"
 check "Android probe redirected (captive)" sh -c "ip netns exec hsclient curl -s -m5 -o /dev/null -w '%{http_code}' http://10.98.0.2/generate_204 | grep -q 302"
-check "DNS hijacked to router (v4)" sh -c "ip netns exec hsclient nslookup wg.test 10.98.0.2 | grep -q 10.98.0.4"
-check "DNS hijacked to router (v6)" sh -c "ip netns exec hsclient nslookup wg.test fd98::2 | grep -q 10.98.0.4"
+# dnsmasq may still be restarting after the daemon changed its snippet.
+hijacked() { for i in 1 2 3 4 5; do C nslookup wg.test "$1" 2>/dev/null | grep -q 10.98.0.4 && return 0; sleep 1; done; return 1; }
+check "DNS hijacked to router (v4)" hijacked 10.98.0.2
+check "DNS hijacked to router (v6)" hijacked fd98::2
 
 echo "== walled garden"
 check "IP entry reachable (v4)" code_is http://10.98.0.3/
@@ -574,6 +584,41 @@ radbad Auth-Type := Reject
 	Session-Timeout = 600
 EOF
 	cat $BK/fr-authorize; } > $RD/mods-config/files/authorize
+	# Own minimal site: the stock one needs eap, mschap and more modules
+	# than a small router installs. Only files, pap, chap and detail are used.
+	mkdir -p $BK/fr-sites
+	cp -a $RD/sites-enabled/. $BK/fr-sites/
+	rm -f $RD/sites-enabled/*
+	cat > $RD/sites-enabled/hstest <<'EOF'
+server hstest {
+	listen {
+		type = auth
+		ipaddr = 127.0.0.1
+		port = 1812
+	}
+	listen {
+		type = acct
+		ipaddr = 127.0.0.1
+		port = 1813
+	}
+	authorize {
+		files
+		chap
+		pap
+	}
+	authenticate {
+		Auth-Type PAP {
+			pap
+		}
+		Auth-Type CHAP {
+			chap
+		}
+	}
+	accounting {
+		detail
+	}
+}
+EOF
 	rm -rf /var/db/radacct
 	dd if=/dev/zero of=/tmp/hsinet-www/big.bin bs=1k count=200 2>/dev/null
 	/etc/init.d/radiusd restart
@@ -604,20 +649,25 @@ EOF
 	check "Interim-Update with traffic" sh -c "cat $ACCT/detail-* | grep -A30 'Interim-Update' | grep -E 'Acct-Output-Octets = [0-9]{6,}' -q"
 	check "Interim carries gigawords" sh -c "cat $ACCT/detail-* | grep -q 'Acct-Output-Gigawords = 0'"
 	s=$(sid radalice)
-	out=$(printf 'Acct-Session-Id = "%s"\nMessage-Authenticator = 0x00\n' "$s" | radclient -r1 -t3 127.0.0.1:3799 disconnect testing123 2>&1)
+	# Requests that expect an answer get a retry and a longer timeout: slow
+	# routers can take more than 3 s (a retransmission gets the cached answer).
+	out=$(printf 'Acct-Session-Id = "%s"\nMessage-Authenticator = 0x00\n' "$s" | radclient -r2 -t6 127.0.0.1:3799 disconnect testing123 2>&1)
 	check "Disconnect-Request acknowledged" sh -c "echo '$out' | grep -q 'Disconnect-ACK'"
-	check_not "offline after Disconnect" online4
+	offline_soon() { for i in 1 2 3; do online4 || return 0; sleep 1; done; return 1; }
+	check "offline after Disconnect" offline_soon
 	check "Stop with Admin-Reset" sh -c "cat $ACCT/detail-* | grep -B30 'Acct-Terminate-Cause = Admin-Reset' | grep -q radalice"
-	out=$(printf 'Acct-Session-Id = "deadbeef"\nMessage-Authenticator = 0x00\n' | radclient -r1 -t3 127.0.0.1:3799 disconnect testing123 2>&1)
+	out=$(printf 'Acct-Session-Id = "deadbeef"\nMessage-Authenticator = 0x00\n' | radclient -r2 -t6 127.0.0.1:3799 disconnect testing123 2>&1)
 	check "Disconnect for unknown session NAKed" sh -c "echo '$out' | grep -q 'Disconnect-NAK'"
 	out=$(printf 'User-Name = "nobody"\n' | radclient -r1 -t3 127.0.0.1:3799 disconnect testing123 2>&1)
 	check_not "Disconnect without Message-Authenticator ignored" sh -c "echo '$out' | grep -qE 'Disconnect-(ACK|NAK)'"
 
 	post_has 'username=radalice&password=radpw' 'You are connected'
-	out=$(printf 'User-Name = "radalice"\nSession-Timeout = 4\nMikrotik-Rate-Limit = "1M/1M"\nMessage-Authenticator = 0x00\n' | radclient -r1 -t3 127.0.0.1:3799 coa testing123 2>&1)
+	out=$(printf 'User-Name = "radalice"\nSession-Timeout = 4\nMikrotik-Rate-Limit = "1M/1M"\nMessage-Authenticator = 0x00\n' | radclient -r2 -t6 127.0.0.1:3799 coa testing123 2>&1)
 	check "CoA acknowledged" sh -c "echo '$out' | grep -q 'CoA-ACK'"
-	command -v tc >/dev/null && check "CoA rate applied to the tc class" sh -c "sleep 3; tc class show dev br-hstest | grep -q 'ceil 1Mbit'"
+	# The CoA also set Session-Timeout = 4: check before the session ends,
+	# polling rather than sleeping (slow routers take longer to apply it).
 	check "CoA changed the rate limit" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radalice'].rate_limit\")\" = 1M/1M ]"
+	command -v tc >/dev/null && check "CoA rate applied to the tc class" sh -c "for i in 1 2 3; do tc class show dev br-hstest | grep -q 'ceil 1Mbit' && exit 0; sleep 1; done; exit 1"
 	sleep 4
 	poll_wait
 	check_not "CoA Session-Timeout ended the session" online4

@@ -15,6 +15,13 @@ online4() { [ "$(ccurl -o /dev/null -w '%{http_code}' http://10.98.0.2/)" = 200 
 hs() { ubus call wrthotspot "$@"; }
 daemon_pid() { pgrep -f 'ucode -S /usr/sbin/hotspotd' | head -1; }
 reload_hs() { /etc/init.d/wrthotspot reload; sleep 3; }
+# The daemon publishes its ubus object once the dataplane is built: wait for
+# that (slow routers need well over 3 s) instead of a fixed sleep.
+restart_hs() {
+	/etc/init.d/wrthotspot restart
+	for i in $(seq 1 30); do ubus -t 2 call wrthotspot status >/dev/null 2>&1 && break; sleep 1; done
+	sleep 1
+}
 logout_client() { wrthotspot logout 02:00:00:00:99:10 >/dev/null 2>&1; }
 login() { ccurl -d "username=$1&password=$2&dst=http://10.98.0.2/" $P/login | grep -q 'You are connected'; }
 
@@ -29,7 +36,7 @@ wrthotspot user add regr password=pw1 >/dev/null
 
 echo "== core without wrt-hotspot-radius"
 mv /usr/share/ucode/wrthotspot/radius.uc /tmp/radius.uc.regr
-/etc/init.d/wrthotspot restart; sleep 3
+restart_hs
 pid=$(daemon_pid)
 check "local login works without RADIUS" login regr pw1
 check "online" online4
@@ -38,14 +45,14 @@ check_not "logout works without RADIUS" online4
 same_pid() { [ "$(daemon_pid)" = "$pid" ]; }
 check "daemon survived login and logout" same_pid
 mv /tmp/radius.uc.regr /usr/share/ucode/wrthotspot/radius.uc
-/etc/init.d/wrthotspot restart; sleep 3
+restart_hs
 
 echo "== tc: first shaped session after a start is not the root class"
 if command -v tc >/dev/null; then
 	uci set wrthotspot.regrprof=user_profile; uci set wrthotspot.regrprof.name=regrprof; uci set wrthotspot.regrprof.rate_limit=1M/2M
 	uci commit wrthotspot
 	wrthotspot user set regr profile=regrprof >/dev/null
-	/etc/init.d/wrthotspot restart; sleep 3
+	restart_hs
 	login regr pw1
 	sleep 2
 	root_full() { tc class show dev br-hstest | grep 'class htb 1:1 root' | grep -qv 'ceil 2Mbit'; }
@@ -128,7 +135,7 @@ if command -v radclient >/dev/null && [ -f /usr/share/ucode/wrthotspot/radius.uc
 	check "Disconnect with an hour-old Event-Timestamp ignored" online4
 	fresh_ok() {
 		printf 'Acct-Session-Id = "%s"\nEvent-Timestamp = %s\nMessage-Authenticator = 0x00\n' "$sid" "$(date +%s)" |
-			radclient -r1 -t2 127.0.0.1:3799 disconnect testing123 2>&1 | grep -q 'Disconnect-ACK'
+			radclient -r2 -t6 127.0.0.1:3799 disconnect testing123 2>&1 | grep -q 'Disconnect-ACK'
 	}
 	check "a current Disconnect still works" fresh_ok
 	logout_client

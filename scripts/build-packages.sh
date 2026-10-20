@@ -50,12 +50,13 @@ cd "$DIR"
 # luci-base host tools to build. Nothing is compiled for the target besides
 # our own packages: they are data only, so NO_DEPS=1 skips their runtime
 # dependencies (tc-full, uhttpd, luci-base, ...), which the router installs.
-grep -qs '^src-link wrthotspot ' feeds.conf || {
-	cp feeds.conf.default feeds.conf
-	echo "src-link wrthotspot $REPO/feed" >> feeds.conf
-}
+# src-cpy, not src-link: a linked feed records the absolute build path as the
+# package origin; a copied one records feeds/wrthotspot/... like official feeds.
+cp feeds.conf.default feeds.conf
+echo "src-cpy wrthotspot $REPO/feed" >> feeds.conf
 
 echo "== feeds"
+rm -rf feeds/wrthotspot	# fresh copy: files removed from the repo must not linger
 # A re-run cannot "git pull" the pinned base feed: rely on the index files instead.
 ./scripts/feeds update wrthotspot base luci >/dev/null 2>&1 || true
 for f in wrthotspot base luci; do [ -s feeds/$f.index ] || { echo "feed $f missing" >&2; exit 1; }; done
