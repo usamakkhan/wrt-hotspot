@@ -149,18 +149,18 @@ both sets.
 
 The feeds are published as assets of the GitHub release
 ([releases](https://github.com/usamakkhan/wrt-hotspot/releases)): upload the files of `dist/24.10.8/`
-and `dist/25.12.6/` (except `index.json`) to the release, e.g. `v0.8.0`. Then on the router:
+and `dist/25.12.6/` (except `index.json`) to the release, e.g. `v0.8.1`. Then on the router:
 
 ```sh
 # 25.12 (apk)
-wget -O /etc/apk/keys/wrthotspot.pem https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.0/wrthotspot.pem
-echo https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.0/packages.adb >> /etc/apk/repositories.d/customfeeds.list
+wget -O /etc/apk/keys/wrthotspot.pem https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.1/wrthotspot.pem
+echo https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.1/packages.adb >> /etc/apk/repositories.d/customfeeds.list
 apk update && apk add wrt-hotspot-full
 
 # 24.10 (opkg)
-wget -O /tmp/wrthotspot.pub https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.0/dcedbf2d84a0ef59
+wget -O /tmp/wrthotspot.pub https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.1/dcedbf2d84a0ef59
 opkg-key add /tmp/wrthotspot.pub
-echo 'src/gz wrthotspot https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.0' >> /etc/opkg/customfeeds.conf
+echo 'src/gz wrthotspot https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.1' >> /etc/opkg/customfeeds.conf
 opkg update && opkg install wrt-hotspot-full
 ```
 
