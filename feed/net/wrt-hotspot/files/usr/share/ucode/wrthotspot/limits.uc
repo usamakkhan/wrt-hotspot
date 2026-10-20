@@ -153,6 +153,14 @@ export function parse(s, parse_duration, parse_size) {
 	if (!(reset in [ 'never', 'hourly', 'daily', 'weekly', 'monthly' ]))
 		return [ null, `invalid reset "${reset}"` ];
 
+	// A typo must not silently mean "unlimited".
+	for (let k in [ 'download_limit', 'upload_limit', 'transfer_limit' ])
+		if (s[k] != null && s[k] !== '' && parse_size(s[k]) == null)
+			return [ null, `invalid ${k} "${s[k]}" (use bytes or e.g. 500M, 2G)` ];
+
+	if (s.uptime_limit != null && s.uptime_limit !== '' && parse_duration(s.uptime_limit) == null)
+		return [ null, `invalid uptime_limit "${s.uptime_limit}" (use e.g. 30m, 2h)` ];
+
 	let lim = {
 		name: s.name ?? s['.name'],
 		days, from, till,

@@ -83,6 +83,12 @@ return baseclass.extend({
 	flush: callFlush,
 	reload: callReload,
 
+	// LuCI puts string children in with innerHTML: every value that comes from
+	// users, RADIUS or the network goes through this.
+	h: function(v) {
+		return '%h'.format(v == null ? '' : String(v));
+	},
+
 	loginMethods: LOGIN_METHODS,
 	parseRateLimit: parseRateLimit,
 

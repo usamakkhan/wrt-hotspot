@@ -60,7 +60,7 @@ return view.extend({
 			var fix = c.fix ? E('button', { 'class': 'btn cbi-button-action', 'click': ui.createHandlerFn(this, 'fix', c.fix) },
 				/^setup:/.test(c.fix) ? _('Set up %s').format(c.fix.substr(6)) : _('Fix')) : '';
 
-			return [ E('span', { 'class': 'label ' + b[0] }, b[1]), c.message, fix ];
+			return [ E('span', { 'class': 'label ' + b[0] }, b[1]), hs.h(c.message), fix ];
 		}, this));
 	},
 

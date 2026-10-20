@@ -8,6 +8,7 @@ import { cursor } from 'uci';
 import { fmt_duration, fmt_bytes, run } from 'wrthotspot.util';
 import { run_checks } from 'wrthotspot.diag';
 import { load as load_config, parse_proxy } from 'wrthotspot.config';
+import { remove_dnsmasq, remove_odhcpd } from 'wrthotspot.dns';
 
 const USAGE = `Usage: wrthotspot <command> [args]
 
@@ -36,6 +37,7 @@ const USAGE = `Usage: wrthotspot <command> [args]
   setup <network>             create firewall zone/rules, DHCP + server for a network
   check                       sanity checks (offloading, nftables, dnsmasq)
   flush                       log everybody out and remove the dataplane
+  cleanup                     withdraw the portal from dnsmasq/odhcpd (used when disabled)
 `;
 
 let conn;
@@ -119,7 +121,6 @@ function setup(net) {
 	if (!net || c.get('network', net) != 'interface')
 		die(`No network interface "${net}" in /etc/config/network\n`);
 
-	let port = c.get('wrthotspot', 'global', 'portal_port') ?? '8002';
 	let zone = null;
 
 	c.foreach('firewall', 'zone', (z) => {
@@ -162,8 +163,24 @@ function setup(net) {
 		{ name: 'ICMPv6', proto: 'icmp', family: 'ipv6',
 		  icmp_type: [ 'echo-request', 'router-solicitation', 'neighbour-solicitation', 'neighbour-advertisement' ] },
 		{ name: 'DNS', proto: [ 'tcp', 'udp' ], dest_port: '53' },
-		{ name: 'Portal', proto: 'tcp', dest_port: `${port} ${int(port) + 1}` },
 	];
+
+	// The portal's ports come from the configuration (https_port is not
+	// always portal_port + 1), and must follow it when setup runs again.
+	let g = load_config().global;
+	let want_portal = `${g.portal_port} ${g.https_port}`;
+	let portal_rule = `Allow-${zone}-Portal`;
+	let stale_portal = [];
+
+	c.foreach('firewall', 'rule', (s) => {
+		if (s.name == portal_rule && s.dest_port != want_portal)
+			push(stale_portal, s['.name']);
+	});
+
+	for (let sid in stale_portal)
+		c.delete('firewall', sid);
+
+	push(rules, { name: 'Portal', proto: 'tcp', dest_port: want_portal });
 
 	// A transparent proxy on the router needs its port open like the portal.
 	let proxy_ports = {};
@@ -444,6 +461,13 @@ case 'check':
 case 'flush':
 	ok(call('flush'));
 	print('All sessions logged out, dataplane removed\n');
+	break;
+
+// The service is disabled: clients must no longer be told about a portal
+// (DHCP option 114, RA captive_portal_uri, nftset lines for a missing table).
+case 'cleanup':
+	let d = remove_dnsmasq(true), o = remove_odhcpd(true);
+	print(`dnsmasq: ${d ? 'portal settings removed' : 'nothing to remove'}, odhcpd: ${o ? 'portal URI removed' : 'nothing to remove'}\n`);
 	break;
 
 default:

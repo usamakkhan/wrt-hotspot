@@ -3,8 +3,8 @@
 A captive portal hotspot for OpenWrt 24.10+, inspired by MikroTik Hotspot, with full IPv6 support, RADIUS (incl. CoA),
 vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 
-Status: **0.8.0 — Phases 1–8 working, qualified on x86**: tested end to end on OpenWrt 25.12.5 x86-64
-against FreeRADIUS 3.2.10 (154 + 53 + 16 + 32 + 16 end-to-end checks), rates measured by iperf3, 2000 sessions on one 236 MB VM and
+Status: **0.8.1 — Phases 1–8 working, qualified on x86**: tested end to end on OpenWrt 25.12.5 x86-64
+against FreeRADIUS 3.2.10 (154 + 53 + 16 + 34 + 24 + 12 end-to-end checks), rates measured by iperf3, 2000 sessions on one 236 MB VM and
 150 simultaneous real clients through the portal, upgrades from 0.7.0 through the signed feed. Packages
 build with the official 24.10 (ipk) and 25.12 (apk) SDKs. Physical MIPS/ARM routers are still to be tested.
 
@@ -13,6 +13,7 @@ build with the official 24.10 (ipk) and 25.12 (apk) SDKs. Physical MIPS/ARM rout
 - [docs/architecture.md](docs/architecture.md) — architecture, phases and feature comparison
 - [docs/qualification.md](docs/qualification.md) — load and traffic tests, capacity tiers
 - [docs/billing-integration.md](docs/billing-integration.md) — SAS4 and other RADIUS / billing systems, RouterOS API
+- [CHANGELOG.md](CHANGELOG.md) — what changed in each release
 
 ## What works today
 
@@ -61,7 +62,9 @@ build with the official 24.10 (ipk) and 25.12 (apk) SDKs. Physical MIPS/ARM rout
   online users and manage hotspot users. See [docs/billing-integration.md](docs/billing-integration.md).
 - RADIUS is optional (`wrt-hotspot-radius`): small routers run on local users and vouchers only.
 - Transparent HTTP proxy per server profile (MikroTik `transparent-proxy` / `http-proxy`): a proxy on
-  the router (IPv4 + IPv6) or another host.
+  the router (IPv4 + IPv6) or another host. Traffic through a proxy *on the router* is not counted
+  toward users' data limits or accounting (it never crosses the forward path); with a proxy on
+  another host it is.
 
 ## Operator panel
 

@@ -53,8 +53,12 @@ return view.extend({
 
 	refresh: function() {
 		var q = document.getElementById('hs-user-search');
+		var my = this.seq = (this.seq || 0) + 1;	// only the newest search may draw
 
 		return hs.users(0, 500, q ? q.value.trim() : '').then(L.bind(function(r) {
+			if (my !== this.seq)
+				return;
+
 			cbi_update_table('#hs-users', this.rows(r.users || []), E('em', _('No users')));
 			this.showCount(r);
 		}, this));
@@ -74,14 +78,14 @@ return view.extend({
 			var used = u.used || {};
 
 			return [
-				E('strong', u.name),
-				u.profile,
-				u.server || 'all',
-				u.mac || '-',
+				E('strong', hs.h(u.name)),
+				hs.h(u.profile),
+				hs.h(u.server || 'all'),
+				hs.h(u.mac || '-'),
 				limitText(u),
 				'%s, ⇡%s ⇣%s'.format(hs.fmtDuration(used.uptime), hs.fmtBytes(used.bytes_in), hs.fmtBytes(used.bytes_out)),
 				u.disabled ? E('span', { 'class': 'label warning' }, _('disabled')) : _('enabled'),
-				u.comment || '',
+				hs.h(u.comment || ''),
 				E('div', { 'class': 'nowrap' }, [
 					E('button', { 'class': 'btn cbi-button-edit', 'click': ui.createHandlerFn(this, 'edit', u) }, _('Edit')), ' ',
 					E('button', { 'class': 'btn cbi-button', 'click': ui.createHandlerFn(this, 'reset', u) }, _('Reset counters')), ' ',
@@ -178,7 +182,7 @@ return view.extend({
 			}, _('Save'))
 		]));
 
-		ui.showModal(u ? _('Edit user %s').format(u.name) : _('Add user'), body);
+		ui.showModal(u ? _('Edit user %s').format(hs.h(u.name)) : _('Add user'), body);
 	},
 
 	reset: function(u) {
@@ -186,7 +190,7 @@ return view.extend({
 	},
 
 	remove: function(u) {
-		return ui.showModal(_('Delete %s?').format(u.name), [
+		return ui.showModal(_('Delete %s?').format(hs.h(u.name)), [
 			E('p', _('The user is deleted and logged out.')),
 			E('div', { 'class': 'right' }, [
 				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',

@@ -50,6 +50,21 @@ export function publish(conn, core) {
 		return conn.call('session', 'get', { ubus_rpc_session: sid })?.values?.username ?? '';
 	}
 
+	// rpcd keeps the ACLs a session got at login: after a role or password
+	// change (or removal) the account's open sessions must end. rpcd answers
+	// "session list" with one message per session, so read the CLI output.
+	function end_sessions(username, keep_sid) {
+		let out = run('ubus call session list 2>/dev/null').out ?? '';
+
+		for (let chunk in split(out, /\n\}\n/)) {
+			let sid = match(chunk, /"ubus_rpc_session": "([0-9a-f]{32})"/);
+			let who = match(chunk, /"username": "([^"]*)"/);
+
+			if (sid && who && who[1] == username && sid[1] != keep_sid)
+				conn.call('session', 'destroy', { ubus_rpc_session: sid[1] });
+		}
+	}
+
 	// Admins (LuCI root, panel admins, local ubus callers) may manage operators.
 	function is_admin(req) {
 		let sid = req.args.ubus_rpc_session;
@@ -172,7 +187,10 @@ export function publish(conn, core) {
 		// Who am I (operator panel): login name and what the session may do.
 		whoami: {
 			call: function(req) {
-				return { username: caller(req), admin: is_admin(req) };
+				// tz_offset: the router's UTC offset (s). Reports group by the
+				// router's days, so the panel must count days the same way.
+				let now = time();
+				return { username: caller(req), admin: is_admin(req), tz_offset: timegm(localtime(now)) - now };
 			},
 		},
 
@@ -225,6 +243,10 @@ export function publish(conn, core) {
 		voucher_revoke: {
 			args: { batch: '', all: false },
 			call: function(req) {
+				// Ordinary users have batch "": an empty batch would select them all.
+				if (!req.args.batch)
+					return err('batch is required');
+
 				let names = vouchers.revoke(core.users(), req.args.batch, req.args.all);
 
 				for (let n in names)
@@ -265,6 +287,10 @@ export function publish(conn, core) {
 			call: function(req) {
 				let a = req.args;
 				let e = operators.set(a.username, (a.password === '' || a.password == null) ? null : a.password, a.role || 'operator', a.comment);
+
+				if (!e)
+					end_sessions(a.username, req.args.ubus_rpc_session);
+
 				return e ? err(e) : { ok: true };
 			},
 		},
@@ -276,6 +302,10 @@ export function publish(conn, core) {
 					return err('you cannot remove your own account');
 
 				let e = operators.remove(req.args.username);
+
+				if (!e)
+					end_sessions(req.args.username, req.args.ubus_rpc_session);
+
 				return e ? err(e) : { ok: true };
 			},
 		},

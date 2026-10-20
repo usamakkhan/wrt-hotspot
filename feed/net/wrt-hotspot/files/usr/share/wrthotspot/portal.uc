@@ -18,7 +18,7 @@ const MIME = {
 };
 
 const BUILTIN_PAGES = '/usr/share/wrthotspot/pages/default';
-const MAX_BODY = 16384;
+const MAX_BODY = 4096;		// a login form is a few hundred bytes; slow big bodies tie up workers
 const COOKIE = 'wrthotspot';
 
 // What OS connectivity probes expect once the client is online. Unauthenticated
@@ -40,8 +40,10 @@ function send_response(status, headers, body) {
 	// A kept-alive connection could still be NATed to us after login.
 	headers['Connection'] = 'close';
 
+	// No value may end the header line: CR/LF from a request (dst=%0d%0a...)
+	// would add headers or a body of the client's choosing.
 	for (let k, v in headers)
-		out += `${k}: ${v}\r\n`;
+		out += `${k}: ${replace(`${v}`, /[\r\n]/g, '')}\r\n`;
 
 	uhttpd.send(out + '\r\n');
 
@@ -136,6 +138,32 @@ function origin(scheme, host, port) {
 	return `${scheme}://${host}${(port == dflt) ? '' : `:${port}`}`;
 }
 
+// Where to send the client after login: only plain http(s) URLs with a host.
+// "javascript:" and friends would run on the portal's origin, and control
+// characters would end up in the Location header.
+function safe_dst(v) {
+	v = `${v ?? ''}`;
+
+	// (POSIX classes: ucode regexes have no \x.. or \s inside brackets)
+	return match(v, /^https?:\/\/[^\/?#[:space:]]+([\/?#][^[:space:]]*)?$/i) && !match(v, /[[:cntrl:]]/) ? v : '';
+}
+
+// True when the browser says the request comes from another site (Origin, or
+// Referer when there is no Origin). Captive-portal assistants and plain links
+// often send neither: that is not treated as cross-site.
+function cross_site(env, ctx) {
+	let src = env.HTTP_ORIGIN ?? env.HTTP_REFERER;
+
+	if (src == null || src == '' || src == 'null')
+		return src == 'null';	// "null": a sandboxed or opaque origin
+
+	// authority part; host_without_port() handles "[v6]:port" and "host:port"
+	let m = match(src, /^https?:\/\/([^\/?#]+)/i);
+	let h = m ? host_without_port(m[1]) : null;
+
+	return !(h && (h == host_without_port(ctx.host) || h == ctx.server_addr || h == lc(ctx.sp.dns_name ?? '')));
+}
+
 function page_path(sp, name) {
 	if (!match(name, /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/) || index(name, '..') >= 0)
 		return null;
@@ -226,7 +254,8 @@ function do_login(ctx, conn) {
 	let sp = ctx.sp;
 	let req = { ip: ctx.ip, username: f.username ?? '', password: f.password ?? '' };
 
-	if (f.trial == 'yes' || match(req.username, /^T-/))
+	// (only the form decides: an account may well be called "T-something")
+	if (f.trial == 'yes')
 		req.method = 'trial';
 	else if ('http-chap' in sp.login_by && !ctx.https_login && match(req.password, /^[0-9a-fA-F]{32}$/))
 		req = { ...req, method: 'http-chap', chap_response: req.password };
@@ -289,7 +318,7 @@ global.handle_request = function(env) {
 		login_base: https_login ? origin('https', host, g.https_port) : base,
 		identity: g.nas_identifier || 'WrtHotspot',
 		server_addr: normalize_ip(env.SERVER_ADDR),
-		dst: form.dst ?? '',
+		dst: safe_dst(form.dst),
 	};
 
 	// Any request for a foreign host was redirected here by nftables.
@@ -345,7 +374,12 @@ global.handle_request = function(env) {
 			return;
 		}
 
-		if (env.REQUEST_METHOD == 'POST' || form.username != null || form.trial == 'yes') {
+		if ((env.REQUEST_METHOD == 'POST' || form.username != null || form.trial == 'yes') && cross_site(env, ctx)) {
+			// Another site submitting our login form (login CSRF): show the
+			// page, log nobody in.
+			ctx.error = 'please log in on this page';
+		}
+		else if (env.REQUEST_METHOD == 'POST' || form.username != null || form.trial == 'yes') {
 			let res = do_login(ctx, conn);
 
 			if (res.ok) {
@@ -385,6 +419,13 @@ global.handle_request = function(env) {
 
 		if (!client?.session) {
 			render_page(sp, 'flogout.html', variables(ctx), erase);
+			return;
+		}
+
+		// Another site linking to /logout (an <img>, a form) must not end the
+		// session: show the status page with its logout button instead.
+		if (cross_site(env, ctx)) {
+			render_page(sp, 'status.html', variables(ctx));
 			return;
 		}
 

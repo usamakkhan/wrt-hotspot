@@ -15,7 +15,7 @@ import { run, write_atomic, log } from 'wrthotspot.util';
 
 export const TABLE = 'inet wrthotspot';
 export const MARK_MASK = '0xffff0000';
-export const MAX_SLOT = 65535;
+export const MAX_SLOT = 0xffef;	// tc ids use slot + 1 and must stay below 0xfff1 (shaper.uc)
 
 export function slot_mark(slot) {
 	return slot << 16;
@@ -153,8 +153,10 @@ export function ruleset(state) {
 	for (let kind in [ 'bypass', 'block' ]) {
 		let t = b[kind];
 		r += set_def(`${kind}_mac`, 'ether_addr', null, t.mac);
-		r += set_def(`${kind}4`, 'ipv4_addr', 'interval', t.v4);
-		r += set_def(`${kind}6`, 'ipv6_addr', 'interval', t.v6);
+		// auto-merge: overlapping entries (10.0.0.0/8 and 10.1.2.3) would
+		// otherwise fail the whole ruleset.
+		r += set_def(`${kind}4`, 'ipv4_addr', 'interval', t.v4, 'auto-merge');
+		r += set_def(`${kind}6`, 'ipv6_addr', 'interval', t.v6, 'auto-merge');
 		r += set_def(`${kind}_macip4`, 'ether_addr . ipv4_addr', null, t.macv4);
 		r += set_def(`${kind}_macip6`, 'ether_addr . ipv6_addr', null, t.macv6);
 	}

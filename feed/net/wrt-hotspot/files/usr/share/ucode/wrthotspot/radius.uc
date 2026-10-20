@@ -171,7 +171,9 @@ function hmac_md5(key, msg) {
 
 // RFC 2865 5.2 User-Password hiding (also used to reveal it in tests).
 function hide_password(password, secret, authenticator) {
-	let p = password;
+	// RFC 2865: at most 128 octets; more would not fit the 253-byte attribute
+	// in whole 16-byte blocks, and the server could not decode it.
+	let p = substr(password, 0, 128);
 	let pad = (16 - (length(p) % 16)) % 16;
 
 	if (length(p) == 0)
@@ -530,6 +532,10 @@ function same_peer(from, address, port) {
 	return from.port == port && (a == address || arrtoip(iptoarr(a) ?? []) == arrtoip(iptoarr(address) ?? []));
 }
 
+// Accounting may hold at most this many request ids (of 256); the backlog
+// is retried this many at a time.
+const ACCT_MAX_PENDING = 128, ACCT_FLUSH_BATCH = 32;
+
 // servers: [ { address, secret, auth_port, acct_port, timeout (ms), retries, require_message_auth } ]
 function client() {
 	let servers = [];
@@ -628,6 +634,12 @@ function client() {
 			return cb(null, 'RADIUS socket error');
 
 		let srv = servers[server_idx];
+
+		// Auth and accounting share the 256 request ids: accounting (which can
+		// wait in the backlog) may use half, so logins always find an id.
+		if (kind == 'acct' && length(filter(values(pending), (p) => p.kind == 'acct')) >= ACCT_MAX_PENDING)
+			return cb(null, 'accounting busy');
+
 		let id = free_id();
 
 		if (id == null)
@@ -655,12 +667,19 @@ function client() {
 		send(r);
 	}
 
+	// A few at a time: a long backlog sent at once would take every id.
 	function flush_backlog() {
-		let items = backlog;
-		backlog = [];
+		let items = slice(backlog, 0, ACCT_FLUSH_BATCH);
+		backlog = slice(backlog, ACCT_FLUSH_BATCH);
 
 		for (let attrs in items)
 			self.accounting(attrs, null);
+
+		if (length(backlog))
+			backlog_timer ??= uloop.timer(5000, () => {
+				backlog_timer = null;
+				flush_backlog();
+			});
 	}
 
 	self = {
@@ -704,6 +723,10 @@ function client() {
 
 /* ---------- CoA / Disconnect listener (RFC 5176) ---------- */
 
+// How far an Event-Timestamp may be off, and how long replies are kept for
+// retransmissions (seconds).
+const REPLAY_WINDOW = 300;
+
 // handler(pkt, srv) -> [ code, attrs ]   (srv = the configured server it came from)
 function coa_server(port, servers_fn, handler) {
 	let s = socket.create(socket.AF_INET6, socket.SOCK_DGRAM | socket.SOCK_NONBLOCK);
@@ -721,6 +744,8 @@ function coa_server(port, servers_fn, handler) {
 		s.close();
 		return null;
 	}
+
+	let seen = {};		// "addr id authenticator" -> { at, reply }
 
 	let h = uloop.handle(s.fileno(), () => {
 		while (true) {
@@ -752,10 +777,32 @@ function coa_server(port, servers_fn, handler) {
 				continue;
 			}
 
+			let to = (ip_family(addr) == 6) ? `[${addr}]:${from.port}` : `[::ffff:${addr}]:${from.port}`;
+			let now = time();
+
+			// RFC 5176 3.5: a request outside the replay window is discarded.
+			let ts = attr(pkt, 'Event-Timestamp');
+			if (ts != null && max(now - ts, ts - now) > REPLAY_WINDOW) {
+				log('warn', 'CoA: request from %s with Event-Timestamp %d s off ignored (replay?)', addr, now - ts);
+				continue;
+			}
+
+			// A retransmission gets the same answer and is not applied twice.
+			let key = `${addr} ${pkt.id} ${pkt.auth}`;
+			for (let k, c in seen)
+				if (now - c.at > REPLAY_WINDOW)
+					delete seen[k];
+
+			if (seen[key]) {
+				s.send(seen[key].reply, 0, to);
+				continue;
+			}
+
 			let res = handler(pkt, srv);
 			let reply = response(res[0], pkt.id, pkt.auth, res[1] ?? [], srv.secret);
 
-			s.send(reply, 0, (ip_family(addr) == 6) ? `[${addr}]:${from.port}` : `[::ffff:${addr}]:${from.port}`);
+			seen[key] = { at: now, reply };
+			s.send(reply, 0, to);
 		}
 	}, uloop.ULOOP_READ);
 

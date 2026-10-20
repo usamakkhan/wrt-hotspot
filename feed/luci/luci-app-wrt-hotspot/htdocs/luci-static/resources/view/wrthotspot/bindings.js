@@ -49,6 +49,13 @@ return view.extend({
 			if (!mac && !addr)
 				return _('A binding needs a MAC address or an address');
 
+			// Same rules as hotspotd, which would otherwise drop the binding.
+			if (addr && /\/.*\./.test(addr))
+				return _('Use a prefix length (10.0.0.0/24), not a netmask');
+
+			if (mac && addr && addr.indexOf('/') >= 0)
+				return _('With a MAC address, give a single address, not a prefix');
+
 			return true;
 		};
 

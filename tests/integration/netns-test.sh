@@ -213,6 +213,12 @@ setup() {
 
 	/etc/init.d/network reload
 	sleep 5
+	# netifd can keep a stale "up" state for a recreated veth of the same
+	# name and then never bring the new one up: do it ourselves.
+	for p in hsclientp hsbypassp hsblockedp; do
+		ip link set "$p" master br-hstest 2>/dev/null
+		ip link set "$p" up
+	done
 	/etc/init.d/firewall reload >/dev/null 2>&1
 	/etc/init.d/dnsmasq restart
 	/etc/init.d/wrthotspot enable

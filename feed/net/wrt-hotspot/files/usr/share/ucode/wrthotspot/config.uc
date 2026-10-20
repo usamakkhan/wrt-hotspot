@@ -65,13 +65,25 @@ export function parse_proxy(v) {
 	return { local: false, family: (length(arr) == 16) ? 6 : 4, address: arrtoip(arr), port };
 };
 
+// The portal's DNS name goes into dnsmasq's configuration: anything that is
+// not a plain host name would stop dnsmasq for the whole router.
+function dns_name(v) {
+	let h = lc(trim(`${v ?? ''}`));
+
+	if (h == '' || match(h, /^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]*[a-z0-9])?$/))
+		return h;
+
+	log('warn', 'Invalid dns_name "%s" ignored (use a host name such as login.wifi)', v);
+	return '';
+}
+
 function server_profile(s, preset) {
 	let login_by = filter(as_list(s.login_by ?? [ 'http-chap', 'cookie' ]), (m) => (m in LOGIN_METHODS));
 	let p = RADIUS_PRESETS[preset ?? 'mikrotik'];
 
 	return {
 		name: s.name ?? s['.name'],
-		dns_name: s.dns_name ?? '',
+		dns_name: dns_name(s.dns_name),
 		html_directory: s.html_directory ?? '/usr/share/wrthotspot/pages/default',
 		login_by,
 		http_cookie_lifetime: dur(s.http_cookie_lifetime, '3d'),
@@ -212,8 +224,13 @@ function walled_garden(s, idx) {
 	}
 
 	if (s.dst_port != null && s.dst_port !== '') {
-		if (!match(`${s.dst_port}`, /^\d{1,5}(-\d{1,5})?$/))
-			return [ null, `invalid dst_port "${s.dst_port}"` ];
+		// nft refuses 0, >65535 and reversed ranges, and with them the
+		// whole ruleset: check here.
+		let m = match(`${s.dst_port}`, /^(\d{1,5})(-(\d{1,5}))?$/);
+		let lo = m ? int(m[1]) : 0, hi = (m && m[3] != null) ? int(m[3]) : lo;
+
+		if (!m || lo < 1 || hi > 65535 || lo > hi)
+			return [ null, `invalid dst_port "${s.dst_port}" (1-65535 or low-high)` ];
 
 		e.dst_port = `${s.dst_port}`;
 		e.protocol ??= 'tcp';
@@ -254,6 +271,25 @@ function ip_binding(s) {
 	return [ b, null ];
 }
 
+// A port option: an invalid value would end up as "NaN" in the ruleset and
+// fail it, so fall back to the default (0 = off where allow_off).
+function port(v, dflt, name, allow_off) {
+	if (v == null || v === '')
+		return dflt;
+
+	let n = match(`${v}`, /^[0-9]{1,5}$/) ? int(v) : -1;
+
+	if ((n == 0 && allow_off) || (n >= 1 && n <= 65535))
+		return n;
+
+	log('warn', 'Invalid %s "%s", using %d', name, v, dflt);
+	return dflt;
+}
+
+function count(v) {
+	return match(`${v ?? ''}`, /^[0-9]+$/) ? int(v) : 0;
+}
+
 export function load(confdir) {
 	let c = cursor(confdir);
 	let g = c.get_all('wrthotspot', 'global') ?? {};
@@ -262,21 +298,21 @@ export function load(confdir) {
 		global: {
 			enabled: to_bool(g.enabled ?? '1'),
 			poll_interval: dur(g.poll_interval, '10s') || 10,
-			portal_port: int(g.portal_port ?? 8002),
+			portal_port: port(g.portal_port, 8002, 'portal_port'),
 			state_dir: g.state_dir ?? '/tmp/wrthotspot',
 			db_dir: g.db_dir ?? '/etc/wrthotspot',
 			db_sync_interval: dur(g.db_sync_interval, '5m') || 300,
 			log_level: g.log_level ?? 'info',
 			nas_identifier: g.nas_identifier ?? '',
-			https_port: int(g.https_port ?? (int(g.portal_port ?? 8002) + 1)),
+			https_port: port(g.https_port, port(g.portal_port, 8002, 'portal_port') + 1, 'https_port'),
 			ssl_certificate: g.ssl_certificate ?? '',
 			ssl_key: g.ssl_key ?? '',
 			resolve_interval: dur(g.resolve_interval, '5m') || 300,
 			walled_garden_ttl: dur(g.walled_garden_ttl, '1h') || 3600,
 			// RFC 5176 CoA / Disconnect-Request listener; 0 disables it.
-			coa_port: int(g.coa_port ?? 3799),
+			coa_port: port(g.coa_port, 3799, 'coa_port', true),
 			// Finished sessions and voucher sales kept for history and reports.
-			history_size: int(g.history_size ?? 2000),
+			history_size: count(g.history_size ?? 2000),
 			// Rate limiting: auto (tc if available, else nft), tc, nft or off.
 			shaper: g.shaper ?? 'auto',
 			// Root class rate of the tc trees; keep above the real link speed.
@@ -285,8 +321,8 @@ export function load(confdir) {
 			// mode safe / balanced / max; manual max_sessions / max_users win.
 			capacity: (g.capacity == 'off') ? 'off' : 'auto',
 			capacity_mode: g.capacity_mode ?? 'safe',
-			max_sessions: int(g.max_sessions ?? 0),
-			max_users: int(g.max_users ?? 0),
+			max_sessions: count(g.max_sessions),
+			max_users: count(g.max_users),
 			// Allow logins beyond max_sessions (logged as warnings).
 			capacity_override: to_bool(g.capacity_override ?? '0'),
 			// How RADIUS requests look (RADIUS_PRESETS above): mikrotik, coova or generic.
@@ -294,7 +330,7 @@ export function load(confdir) {
 			// RouterOS API subset for MikroTik billing systems (wrt-hotspot-radius).
 			// api_allow empty = only the RADIUS servers and localhost may connect.
 			api_enable: to_bool(g.api_enable ?? '0'),
-			api_port: int(g.api_port ?? 8728),
+			api_port: port(g.api_port, 8728, 'api_port'),
 			api_user: g.api_user ?? '',
 			api_password: g.api_password ?? '',
 			api_allow: as_list(g.api_allow),

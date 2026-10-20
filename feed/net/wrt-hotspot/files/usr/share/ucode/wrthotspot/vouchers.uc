@@ -161,6 +161,9 @@ export function list(users, batch) {
 
 // Delete a batch's vouchers (by default only the unused ones). -> names
 export function revoke(users, batch, all) {
+	if (!batch)
+		return [];
+
 	let names = map(filter(users.list(), (u) => u.batch == batch && (all || !is_used(u))), (u) => u.name);
 	users.remove_many(names);
 	return names;

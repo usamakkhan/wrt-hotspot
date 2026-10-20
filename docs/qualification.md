@@ -20,7 +20,7 @@ package feeds.
 CI (`.github/workflows/ci.yml`) runs the unit tests inside the OpenWrt 24.10 and 25.12 rootfs images
 (the real ucode and nft of each release), lints shell/JSON/JS, and builds both package sets.
 
-## Test suites (on the VM, 0.8.0)
+## Test suites (on the VM, 0.8.1)
 
 | Suite | Result |
 |---|---|
@@ -28,8 +28,9 @@ CI (`.github/workflows/ci.yml`) runs the unit tests inside the OpenWrt 24.10 and
 | `tests/integration/netns-test.sh` (portal, IPv4/IPv6, walled garden, RADIUS + presets + ChilliSpot/Ascend, CoA, shaping, transparent proxy, RFC 8908/8910) | 154 / 154 |
 | `tests/integration/panel-api-test.sh` (operator roles, vouchers, history, reports, capacity force) | 53 / 53 |
 | `tests/integration/capacity-test.sh` (limits, admin force, override) | 16 / 16 |
-| `tests/integration/rosapi-test.uc` (RouterOS API) + `rosapi-librouteros.py` (independent client) | 32 / 32, 11 / 11 |
-| `tests/integration/upgrade-test.sh` (0.7.0 → 0.8.0 through the signed feed) | 16 / 16 |
+| `tests/integration/rosapi-test.uc` (RouterOS API, incl. pipelined login guessing) + `rosapi-librouteros.py` (independent client) | 34 / 34, 11 / 11 |
+| `tests/integration/upgrade-test.sh` (0.7.0 → 0.8.0 and 0.8.0 → 0.8.1 through the signed feed) | 16 / 16, 12 / 12 |
+| `tests/integration/regression-test.sh` (one check per bug fixed in 0.8.1) | 24 / 24 |
 | `tests/integration/traffic-test.sh 150` (below) | 9 / 9 |
 | `tests/integration/load-test.uc 2000` (capacity limits off for the run) | 2000 / 2000 logins |
 

@@ -5,7 +5,7 @@
 			"ubus": {
 				"wrthotspot": [ "status", "sessions", "hosts", "user_list", "user_get", "profiles", "whoami",
 					"voucher_batches", "voucher_list", "history", "report" ],
-				"session": [ "access" ]
+				"session": [ "access", "destroy" ]
 			}
 		},
 		"write": {

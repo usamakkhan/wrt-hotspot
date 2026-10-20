@@ -28,6 +28,8 @@ start_service() {
 			tc qdisc del dev "$d" ingress 2>/dev/null
 		done
 		for d in /sys/class/net/hsifb*; do [ -e "$d" ] && ip link del "${d##*/}"; done
+		# ...and stop announcing the portal (DHCP option 114, RA URI, nftset lines).
+		/usr/sbin/wrthotspot cleanup >/dev/null 2>&1
 		return 0
 	fi
 

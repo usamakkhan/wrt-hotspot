@@ -4,6 +4,7 @@
 #   sh upgrade-test.sh <dir with the old *.apk> <new feed dir with packages.adb + wrthotspot.pem>
 # Installs the old packages, creates state (config, users, a live session,
 # a RADIUS server), upgrades with signature checking and verifies it all.
+# Works from 0.7.0 (RADIUS in the core) and from 0.8.0+ (wrt-hotspot-radius).
 
 OLD=${1:?old package dir}
 FEED=${2:?new feed dir}
@@ -16,6 +17,9 @@ hs() { ubus call wrthotspot "$@"; }
 
 echo "== install the old release"
 old_ver=$(ls "$OLD"/wrt-hotspot-[0-9]*.apk | sed 's/.*wrt-hotspot-\([0-9.]*\)-r.*/\1/')
+# An old release with its own RADIUS package is installed with it.
+old_radius=$(ls "$OLD"/wrt-hotspot-radius-*.apk 2>/dev/null | head -1)
+
 # Clean start: remove whatever is installed, keeping configuration and database.
 cp /etc/config/wrthotspot /tmp/upg-config
 cp -a /etc/wrthotspot /tmp/upg-db
@@ -25,7 +29,7 @@ rm -f /usr/share/ucode/wrthotspot/radius.uc /usr/share/ucode/wrthotspot/rosapi.u
 cp /tmp/upg-config /etc/config/wrthotspot
 rm -rf /etc/wrthotspot && cp -a /tmp/upg-db /etc/wrthotspot
 apk add -q --allow-untrusted --force-overwrite "$OLD"/wrt-hotspot-[0-9]*.apk "$OLD"/wrt-hotspot-shaper-*.apk \
-	"$OLD"/wrt-hotspot-panel-*.apk "$OLD"/luci-app-wrt-hotspot-*.apk 2>&1 | grep -v '^OK'
+	"$OLD"/wrt-hotspot-panel-*.apk "$OLD"/luci-app-wrt-hotspot-*.apk $old_radius 2>&1 | grep -v '^OK'
 /etc/init.d/wrthotspot restart
 sleep 3
 check "old release $old_ver running" "$(yes_if "$(hs status | jsonfilter -e '@.version' | grep -x "$old_ver")")"
@@ -53,12 +57,19 @@ echo "$FEED/packages.adb" > /etc/apk/repositories.d/wrthotspot-test.list
 out=$(apk update 2>&1)
 check "feed index accepted (signature checked)" "$(echo "$out" | grep -qiE 'untrusted|error|BAD'; [ $? = 1 ]; echo $?)" "($(echo "$out" | tail -1))"
 new_ver=$(apk search -x wrt-hotspot 2>/dev/null | sed 's/wrt-hotspot-\([0-9.]*\)-r.*/\1/')
-check "RADIUS for the new core refused next to the old core" \
-	"$(apk add -s wrt-hotspot-radius 2>&1 | grep -qiE 'unable to select|conflict|breaks'; echo $?)"
+
+pkgs="wrt-hotspot wrt-hotspot-shaper wrt-hotspot-panel luci-app-wrt-hotspot"
+if [ -n "$old_radius" ]; then
+	pkgs="$pkgs wrt-hotspot-radius"
+else
+	check "RADIUS for the new core refused next to the old core" \
+		"$(apk add -s wrt-hotspot-radius 2>&1 | grep -qiE 'unable to select|conflict|breaks'; echo $?)"
+fi
+
 # Installed from files the packages are pinned to those exact files: adding
 # them by name drops the pins, then they upgrade from the feed.
-apk add -q wrt-hotspot wrt-hotspot-shaper wrt-hotspot-panel luci-app-wrt-hotspot 2>&1 | grep -v '^OK'
-apk upgrade -q wrt-hotspot wrt-hotspot-shaper wrt-hotspot-panel luci-app-wrt-hotspot 2>&1 | grep -v '^OK'
+apk add -q $pkgs 2>&1 | grep -v '^OK'
+apk upgrade -q $pkgs 2>&1 | grep -v '^OK'
 check "all packages upgraded" "$(apk info -v 2>/dev/null | grep -E '^(wrt-hotspot|luci-app-wrt-hotspot)' | grep -vq "$new_ver"; [ $? = 1 ]; echo $?)"
 /etc/init.d/wrthotspot restart
 sleep 4
@@ -67,13 +78,19 @@ check "config kept (history_size)" "$(yes_if "$(uci -q get wrthotspot.global.his
 check "users kept" "$(yes_if "$(hs status | jsonfilter -e '@.users' | grep -x "$users_before")")"
 check "user details kept" "$(yes_if "$(hs user_list '{"search":"upg1"}' | jsonfilter -e '@.users[0].comment' | grep -x keep-me)")"
 check "session survives the upgrade" "$(yes_if "$(hs sessions | jsonfilter -e "@.sessions[@.id='$sid'].user" | grep -x upg1)")"
-check "RADIUS not available without wrt-hotspot-radius" "$(yes_if "$(hs status | jsonfilter -e '@.radius' | grep -x false)")"
-check "diagnostics explain the missing RADIUS package" "$(yes_if "$(wrthotspot check | grep 'wrt-hotspot-radius is not installed')")"
 
-apk add -q wrt-hotspot-radius 2>&1 | grep -v '^OK'
-sleep 4
-check "wrt-hotspot-radius from the feed restores RADIUS" "$(yes_if "$(hs status | jsonfilter -e '@.radius' | grep -x true)")"
-check "session still there after adding RADIUS" "$(yes_if "$(hs sessions | jsonfilter -e "@.sessions[@.id='$sid'].user")")"
+if [ -n "$old_radius" ]; then
+	check "RADIUS still available after the upgrade" "$(yes_if "$(hs status | jsonfilter -e '@.radius' | grep -x true)")"
+else
+	check "RADIUS not available without wrt-hotspot-radius" "$(yes_if "$(hs status | jsonfilter -e '@.radius' | grep -x false)")"
+	check "diagnostics explain the missing RADIUS package" "$(yes_if "$(wrthotspot check | grep 'wrt-hotspot-radius is not installed')")"
+
+	apk add -q wrt-hotspot-radius 2>&1 | grep -v '^OK'
+	sleep 4
+	check "wrt-hotspot-radius from the feed restores RADIUS" "$(yes_if "$(hs status | jsonfilter -e '@.radius' | grep -x true)")"
+	check "session still there after adding RADIUS" "$(yes_if "$(hs sessions | jsonfilter -e "@.sessions[@.id='$sid'].user")")"
+fi
+
 check "radius.uc owned by wrt-hotspot-radius" "$(yes_if "$(apk info -L wrt-hotspot-radius | grep radius.uc)")"
 check "core package has no RADIUS files" "$(apk info -L wrt-hotspot | grep -qE 'radius.uc|rosapi.uc'; [ $? = 1 ]; echo $?)"
 

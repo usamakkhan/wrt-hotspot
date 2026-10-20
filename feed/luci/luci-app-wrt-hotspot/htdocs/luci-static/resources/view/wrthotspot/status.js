@@ -21,8 +21,8 @@ return view.extend({
 	},
 
 	logout: function(s, ev) {
-		return ui.showModal(_('Log out %s?').format(s.user), [
-			E('p', _('The device %s loses access immediately.').format(s.mac)),
+		return ui.showModal(_('Log out %s?').format(hs.h(s.user)), [
+			E('p', _('The device %s loses access immediately.').format(hs.h(s.mac))),
 			E('div', { 'class': 'right' }, [
 				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
 				E('button', {
@@ -69,16 +69,16 @@ return view.extend({
 				rate += (s.bursting.tx ? ' ⇡' : '');
 
 			return [
-				E('span', { 'title': s.id }, s.user),
-				s.mac,
-				(s.ipv4 || []).join(', ') || '-',
+				E('span', { 'title': s.id }, hs.h(s.user)),
+				hs.h(s.mac),
+				hs.h((s.ipv4 || []).join(', ') || '-'),
 				E('span', { 'title': (s.ipv6 || []).join('\n') }, (s.ipv6 || []).length ? _('%d addr.').format(s.ipv6.length) : '-'),
-				s.server,
-				s.login_by + (s.auth == 'radius' ? ' (RADIUS)' : ''),
+				hs.h(s.server),
+				hs.h(s.login_by + (s.auth == 'radius' ? ' (RADIUS)' : '')),
 				hs.fmtDuration(s.uptime),
 				left,
 				hs.fmtBytes(s.bytes_in) + ' / ' + hs.fmtBytes(s.bytes_out),
-				rate,
+				hs.h(rate),
 				E('button', { 'class': 'btn cbi-button-negative', 'click': ui.createHandlerFn(this, 'logout', s) }, _('Log out'))
 			];
 		}, this));
@@ -87,12 +87,12 @@ return view.extend({
 	hostRows: function(hosts) {
 		return hosts.map(function(h) {
 			return [
-				h.mac,
+				hs.h(h.mac),
 				h.authorized ? E('span', { 'class': 'label success' }, _('logged in')) : _('not logged in'),
-				h.server || '-',
-				h.dev || '-',
-				(h.ipv4 || []).join(', ') || '-',
-				E('span', { 'style': 'word-break:break-all' }, (h.ipv6 || []).join(' ') || '-')
+				hs.h(h.server || '-'),
+				hs.h(h.dev || '-'),
+				hs.h((h.ipv4 || []).join(', ') || '-'),
+				E('span', { 'style': 'word-break:break-all' }, hs.h((h.ipv6 || []).join(' ') || '-'))
 			];
 		});
 	},
@@ -102,12 +102,12 @@ return view.extend({
 		var self = this;
 
 		(ck.cookies || []).forEach(function(c) {
-			rows.push([ _('HTTP'), c.user, c.mac, hs.fmtDuration(c.expires_in),
+			rows.push([ _('HTTP'), hs.h(c.user), hs.h(c.mac), hs.fmtDuration(c.expires_in),
 				E('button', { 'class': 'btn cbi-button-remove', 'click': ui.createHandlerFn(self, 'removeCookie', c) }, _('Remove')) ]);
 		});
 
 		(ck.mac_cookies || []).forEach(function(c) {
-			rows.push([ _('MAC'), c.user, c.mac, hs.fmtDuration(c.expires_in),
+			rows.push([ _('MAC'), hs.h(c.user), hs.h(c.mac), hs.fmtDuration(c.expires_in),
 				E('button', { 'class': 'btn cbi-button-remove', 'click': ui.createHandlerFn(self, 'removeCookie', c) }, _('Remove')) ]);
 		});
 

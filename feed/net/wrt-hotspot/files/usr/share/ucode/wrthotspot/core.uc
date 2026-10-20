@@ -35,6 +35,10 @@ catch (e) {
 		log('error', 'Cannot load RADIUS support: %s', e.message);
 }
 
+// RFC 2866 Acct-Status-Type values; kept here so that no code path touches
+// the (possibly missing) radius module just to name them.
+const ACCT_START = 1, ACCT_STOP = 2, ACCT_INTERIM = 3;
+
 const NO_RADIUS = {
 	set_servers: () => null,
 	have_servers: () => false,
@@ -59,7 +63,7 @@ function load_rosapi() {
 	}
 }
 
-export const VERSION = '0.8.0';
+export const VERSION = '0.8.1';
 
 // MikroTik / RADIUS terminate causes.
 export const CAUSE = {
@@ -559,15 +563,6 @@ export function create(opts) {
 	self.rebuild = function() {
 		let kc = nft.read_counters();
 
-		for (let slot, s in sessions) {
-			let k = kc?.[slot] ?? s.k;
-
-			for (let f in [ 'up_bytes', 'up_packets', 'down_bytes', 'down_packets' ])
-				s.base[f] += k[f] ?? 0;
-
-			s.k = { up_bytes: 0, up_packets: 0, down_bytes: 0, down_packets: 0 };
-		}
-
 		// Transparent HTTP proxy for logged-in clients, per hotspot interface.
 		let proxies = [];
 		for (let dev, srv in devices) {
@@ -576,7 +571,7 @@ export function create(opts) {
 				push(proxies, { dev, ...sp.http_proxy });
 		}
 
-		let text = nft.ruleset({
+		let state = {
 			ifaces: keys(devices),
 			devices,
 			proxies,
@@ -585,7 +580,9 @@ export function create(opts) {
 			bindings: cfg.ip_bindings,
 			walled_garden: cfg.walled_garden,
 			wg_ttl: cfg.global.walled_garden_ttl,
-		});
+		};
+		let had_table = nft.table_exists();
+		let text = nft.ruleset(state);
 
 		let t0 = ms();
 		let err = nft.apply(text, cfg.global.state_dir);
@@ -593,9 +590,31 @@ export function create(opts) {
 		perf.rebuild_ms = ms() - t0;
 		perf.rebuild_rules_kb = int(length(text) / 1024);
 
+		if (err && !had_table) {
+			// Nothing in the kernel yet (boot, after flush): never leave the
+			// network open. Fall back to the plain captive rules; bindings,
+			// walled garden and proxy are what usually carries a bad value.
+			log('error', 'Ruleset refused, loading the minimal captive ruleset: %s', err);
+			let fb = nft.ruleset({ ...state, bindings: [], walled_garden: [], proxies: [] });
+
+			if (!nft.apply(fb, cfg.global.state_dir))
+				log('warn', 'Running with the minimal ruleset: bindings, walled garden and proxy are off until the configuration is fixed');
+		}
+
 		if (err) {
+			// The old table (if any) keeps its counters: do not fold them yet.
 			need_rebuild = true;
 			return err;
+		}
+
+		// The new table starts its counters at zero: keep what the old one had.
+		for (let slot, s in sessions) {
+			let k = kc?.[slot] ?? s.k;
+
+			for (let f in [ 'up_bytes', 'up_packets', 'down_bytes', 'down_packets' ])
+				s.base[f] += k[f] ?? 0;
+
+			s.k = { up_bytes: 0, up_packets: 0, down_bytes: 0, down_packets: 0 };
 		}
 
 		need_rebuild = false;
@@ -733,17 +752,32 @@ export function create(opts) {
 		let up = user_profile(profile);
 		let used = user?.used ?? { uptime: 0, bytes_in: 0, bytes_out: 0 };
 
+		// 0 means "no limit" in the session, so a used-up limit is flagged
+		// (start_session refuses the login) instead of turning into 0.
+		let exhausted = false;
+
 		// Earliest of: profile session-timeout, user's remaining uptime, trial remainder.
 		let max_uptime = up.session_timeout;
-		for (let cand in [ user?.limit_uptime ? user.limit_uptime - used.uptime : 0, extra_uptime ?? 0 ])
+		let uptime_left = user?.limit_uptime ? user.limit_uptime - used.uptime : 0;
+
+		if (user?.limit_uptime && uptime_left <= 0)
+			exhausted = true;
+
+		for (let cand in [ uptime_left, extra_uptime ?? 0 ])
 			if (cand > 0 && (max_uptime == 0 || cand < max_uptime))
 				max_uptime = cand;
 
 		function left(limit, used_n) {
-			return limit ? max(0, limit - used_n) : 0;
+			if (!limit)
+				return 0;
+
+			if (limit - used_n <= 0)
+				exhausted = true;
+
+			return max(1, limit - used_n);
 		}
 
-		return {
+		let lim = {
 			max_uptime,
 			idle_timeout: up.idle_timeout,
 			keepalive_timeout: up.keepalive_timeout,
@@ -752,6 +786,11 @@ export function create(opts) {
 			bytes_total: left(user?.limit_bytes_total, used.bytes_in + used.bytes_out),
 			status_autorefresh: up.status_autorefresh,
 		};
+
+		if (exhausted)
+			lim.exhausted = true;
+
+		return lim;
 	}
 
 	/* ---------- RADIUS authorization ---------- */
@@ -906,7 +945,9 @@ export function create(opts) {
 	}
 
 	function acct_send(s, status, cause) {
-		if (!s.acct)
+		// (a session restored from before wrt-hotspot-radius was removed
+		// may still say acct)
+		if (!s.acct || !radius)
 			return;
 
 		let h = hosts.get(s.mac) ?? { mac: s.mac, dev: s.dev, ip4: {}, ip6: {} };
@@ -923,7 +964,7 @@ export function create(opts) {
 		for (let c in s.radius?.class ?? [])
 			push(a, [ 'Class', hexdec(c) ]);
 
-		if (status != radius.ACCT_START)
+		if (status != ACCT_START)
 			push(a,
 				[ 'Acct-Session-Time', time() - s.started ],
 				[ 'Acct-Input-Octets', i[0] ], [ 'Acct-Input-Gigawords', i[1] ],
@@ -931,7 +972,7 @@ export function create(opts) {
 				[ 'Acct-Input-Packets', t.packets_in % 4294967296 ],
 				[ 'Acct-Output-Packets', t.packets_out % 4294967296 ]);
 
-		if (status == radius.ACCT_STOP)
+		if (status == ACCT_STOP)
 			push(a, [ 'Acct-Terminate-Cause', radius.TERMINATE_CAUSE[cause] ?? 10 ]);
 
 		rad.accounting(a, null);
@@ -1183,11 +1224,23 @@ export function create(opts) {
 	// authz: RADIUS authorization (null for local users); id: Acct-Session-Id
 	// already sent in the Access-Request.
 	function start_session(mac, server, username, profile, login_by, extra_uptime, user, authz, id) {
+		// The device's current session is replaced, but only once everything
+		// below has passed: a refused login must not cost the working session.
 		let old = by_mac[mac];
-		if (old)
-			self.logout(old, CAUSE.NEW_LOGIN);
+		let old_s = old ? sessions[old] : null;
 
-		let n = length(keys(sessions));
+		// Its usage is not in user.used until it ends: count it now, or a
+		// re-login would reset the user's limits.
+		if (user && old_s?.user == username) {
+			let t = totals(old_s);
+			user = { ...user, used: {
+				uptime: (user.used?.uptime ?? 0) + (time() - old_s.started),
+				bytes_in: (user.used?.bytes_in ?? 0) + t.bytes_in,
+				bytes_out: (user.used?.bytes_out ?? 0) + t.bytes_out,
+			} };
+		}
+
+		let n = length(keys(sessions)) - (old_s ? 1 : 0);
 		if (cap?.max_sessions && n >= cap.max_sessions) {
 			let now = time();
 
@@ -1235,18 +1288,32 @@ export function create(opts) {
 		s.limits.bytes_total = min_lim(s.limits.bytes_total, lc.bytes_total);
 		s.periods = lc.periods;
 
-		let err = exec(nft.session_add_cmds(slot, mac));
-		if (err)
-			return [ null, 'dataplane error' ];
+		if (s.limits.exhausted)
+			return [ null, fail('limit', 'the time or data limit of this account has been reached') ];
 
+		delete s.limits.exhausted;
+
+		if (old_s)
+			self.logout(old, CAUSE.NEW_LOGIN);
+
+		// Registered before the dataplane call: if that falls back to a full
+		// rebuild, the rebuilt table must contain this session.
 		sessions[slot] = s;
 		by_mac[mac] = slot;
+
+		let err = exec(nft.session_add_cmds(slot, mac));
+		if (err) {
+			delete sessions[slot];
+			delete by_mac[mac];
+			return [ null, 'dataplane error' ];
+		}
+
 		checkpoint();
 
 		log('info', 'Login %s (%s) on %s by %s%s', username, mac, server, login_by, authz ? ' (RADIUS)' : '');
 		event('login', { user: username, mac, server, session_id: s.id, login_by });
 		run_hook(user_profile(profile).on_login, hook_env(s));
-		acct_send(s, radius.ACCT_START);
+		acct_send(s, ACCT_START);
 		apply_rate(s, true);
 
 		return [ s, null ];
@@ -1348,11 +1415,60 @@ export function create(opts) {
 
 	// Cookie / MAC-cookie: local users are re-checked, RADIUS users get their
 	// stored authorization replayed (with fresh accounting).
+	// The authorization is one grant: what earlier sessions under it used
+	// (entry.used, charged in finish()) is subtracted, and a used-up or
+	// expired grant sends the device back to the login page.
 	function cookie_login(mac, server, entry, method) {
 		if (users.get(entry.user) || !entry.radius)
 			return authorize_user(mac, server, entry.user, method);
 
-		return finish_login(mac, server, entry.user, radius_profile(entry.radius), method, null, entry.radius);
+		let a = { ...entry.radius };
+		let u = entry.used ?? { uptime: 0, bytes_in: 0, bytes_out: 0 };
+		let spent = !a.auth_at;		// cookie from before grants were charged
+
+		if (a.terminate_at && a.terminate_at <= time())
+			spent = true;
+
+		if (a.session_timeout) {
+			a.session_timeout -= u.uptime;
+			spent ||= a.session_timeout <= 0;
+		}
+
+		for (let k in [ 'bytes_in', 'bytes_out', 'bytes_total' ]) {
+			if (a[k] == null)
+				continue;
+
+			a[k] -= (k == 'bytes_total') ? u.bytes_in + u.bytes_out : u[k];
+			spent ||= a[k] <= 0;
+		}
+
+		if (spent) {
+			entry.expires = 0;
+			cookies_dirty = true;
+			return fail('cookie', 'the authorization behind this cookie is used up');
+		}
+
+		return finish_login(mac, server, entry.user, radius_profile(a), method, null, a);
+	}
+
+	// A RADIUS session ended but its cookies live on: charge what it used to
+	// the grant they replay.
+	function charge_cookies(s, uptime, t) {
+		let at = s.radius?.auth_at;
+
+		if (!at)
+			return;
+
+		for (let e in [ mac_cookies[s.mac], ...values(cookies) ]) {
+			if (e?.user != s.user || e.radius?.auth_at != at)
+				continue;
+
+			e.used ??= { uptime: 0, bytes_in: 0, bytes_out: 0 };
+			e.used.uptime += uptime;
+			e.used.bytes_in += t.bytes_in;
+			e.used.bytes_out += t.bytes_out;
+			cookies_dirty = true;
+		}
 	}
 
 	// MAC-cookie: log a returning device back in without any page.
@@ -1444,7 +1560,13 @@ export function create(opts) {
 			}
 
 			if (pkt.code == radius.CODE.ACCESS_ACCEPT) {
+				// Automatic MAC auth answered late: the device may have logged
+				// in some other way meanwhile, keep that session.
+				if (method == 'mac' && by_mac[mac])
+					return done(fail('logged-in', 'already logged in'));
+
 				let authz = parse_authz(pkt);
+				authz.auth_at = time();		// cookies replaying this grant are charged against it
 				return done(finish_login(mac, server, username, radius_profile(authz), method, null, authz, id));
 			}
 
@@ -1487,6 +1609,15 @@ export function create(opts) {
 				t = trials[mac] = { used: 0, window_start: now };
 
 			let remaining = sp.trial_uptime_limit - t.used;
+			let cur = sessions[by_mac[mac]];
+
+			// A trial never replaces a real session, and a running trial's
+			// time counts (it is only added to t.used when it ends).
+			if (cur && cur.login_by != 'trial')
+				return fail('logged-in', 'you are already logged in');
+
+			if (cur)
+				remaining -= now - cur.started;
 
 			if (remaining <= 0)
 				return fail('trial-expired', 'free trial used up, try again later');
@@ -1526,7 +1657,7 @@ export function create(opts) {
 		let password = req.password;
 
 		if (method == 'mac') {
-			username = users.get(mac) ? mac : radius.format_mac(mac, sp.radius_mac_format);
+			username = (users.get(mac) || !radius) ? mac : radius.format_mac(mac, sp.radius_mac_format);
 			password = sp.mac_auth_password;
 		}
 
@@ -1573,6 +1704,11 @@ export function create(opts) {
 
 		if (!sid && !user && !mac && !fip)
 			return [ nak, [ [ 'Error-Cause', 402 ] ] ];		// Missing-Attribute
+
+		// A device the request names but we cannot parse must not widen the
+		// match to all of the user's sessions.
+		if (csid && !mac)
+			return [ nak, [ [ 'Error-Cause', 407 ] ] ];		// Invalid-Attribute-Value
 
 		let matched = filter(values(sessions), (s) =>
 			(!sid || s.id == sid) && (!user || s.user == user) && (!mac || s.mac == mac) && (!fip || s.mac == fmac));
@@ -1637,6 +1773,8 @@ export function create(opts) {
 
 		if (!(cause in COOKIE_KEEP))
 			drop_cookies(s.mac);
+		else
+			charge_cookies(s, uptime, t);
 
 		let h = hosts.get(s.mac);
 		records.add_session({
@@ -1646,7 +1784,7 @@ export function create(opts) {
 			batch: users.get(s.user)?.batch ?? '', uptime, bytes_in: t.bytes_in, bytes_out: t.bytes_out, cause,
 		});
 
-		acct_send(s, radius.ACCT_STOP, cause);
+		acct_send(s, ACCT_STOP, cause);
 
 		log('info', 'Logout %s (%s): %s, %s, in %d / out %d bytes', s.user, s.mac, cause, fmt_duration(uptime), t.bytes_in, t.bytes_out);
 		event('logout', { user: s.user, mac: s.mac, server: s.server, session_id: s.id, cause, uptime, ...t });
@@ -1676,6 +1814,13 @@ export function create(opts) {
 		}
 
 		exec(cmds);
+
+		// Established flows still carry the session's mark; with conntrack-tools
+		// installed, forget them so a reused slot never inherits them.
+		if (length(list) <= 16 && fs.access('/usr/sbin/conntrack', 'x'))
+			for (let item in list)
+				system(sprintf('/usr/sbin/conntrack -D -m %d/%d >/dev/null 2>&1', nft.slot_mark(+item[0]), 0xffff0000));
+
 		checkpoint();		// RAM; user usage reaches flash on the db_sync timer
 		save_cookies(false);
 		return length(cmds) > 0;
@@ -1752,7 +1897,7 @@ export function create(opts) {
 			}
 
 			if (s.acct && s.interim && now >= s.next_interim) {
-				acct_send(s, radius.ACCT_INTERIM);
+				acct_send(s, ACCT_INTERIM);
 				s.next_interim = now + s.interim;
 			}
 
@@ -1806,8 +1951,22 @@ export function create(opts) {
 		}
 
 		// Forget unauthorized hosts after the server's idle-timeout.
-		if (rates_due)
+		if (rates_due) {
 			hosts.prune((server) => cfg.servers[server]?.idle_timeout ?? 0, (mac) => !!by_mac[mac]);
+
+			// Per-MAC bookkeeping must not grow with every random MAC ever seen.
+			for (let mac, at in mac_tried)
+				if (now - at >= 60)
+					delete mac_tried[mac];
+
+			let reset = 0;
+			for (let n, sp in cfg.server_profiles)
+				reset = max(reset, sp.trial_uptime_reset);
+
+			for (let mac, tr in trials)
+				if (now - tr.window_start >= reset && !by_mac[mac])
+					delete trials[mac];
+		}
 
 		for (let mac, c in chap)
 			if (c.expires < now)
@@ -1876,9 +2035,17 @@ export function create(opts) {
 			// A device we have a MAC cookie for showed up again. Not before
 			// start-up is done: the first neighbor dump runs before the saved
 			// sessions are restored, and would log everybody in twice.
+			// (runs straight from uloop: an exception here would end the daemon)
 			on_update: (h) => {
-				if (started && !by_mac[h.mac])
+				if (!started || by_mac[h.mac])
+					return;
+
+				try {
 					auto_login(h.mac);
+				}
+				catch (e) {
+					log('error', 'automatic login of %s: %s', h.mac, e.message);
+				}
 			},
 		});
 

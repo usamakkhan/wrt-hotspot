@@ -62,6 +62,20 @@ return view.extend({
 
 		o = s.option(form.Value, 'comment', _('Comment'));
 
+		// Same rule as hotspotd, which would otherwise drop the entry.
+		s.validate = function(section_id) {
+			var host = this.formvalue(section_id, 'dst_host'), port = this.formvalue(section_id, 'dst_port');
+			var addrs = this.formvalue(section_id, 'dst_address') || [];
+
+			if (!host && !addrs.length && !port)
+				return _('An entry needs a host, an address or a port');
+
+			if (addrs.some(function(a) { return /\/.*\./.test(a); }))
+				return _('Use a prefix length (203.0.113.0/24), not a netmask');
+
+			return true;
+		};
+
 		return m.render();
 	}
 });

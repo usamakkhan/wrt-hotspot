@@ -67,12 +67,32 @@
 
 	function money(v) { return (+v || 0).toFixed(2); }
 
-	function dayStart(d) { d = new Date(d); d.setHours(0, 0, 0, 0); return Math.floor(d.getTime() / 1000); }
+	// Days are the router's days (reports group by its local time), whatever
+	// time zone the browser is in. S.tz = the router's UTC offset in seconds.
+	function tz() { return S.tz != null ? S.tz : -new Date().getTimezoneOffset() * 60; }
+
+	// Start (unix time) of the router's day containing `d` (ms, as Date.now()).
+	function dayStart(d) {
+		var t = Math.floor(d / 1000) + tz();
+		return t - (((t % 86400) + 86400) % 86400) - tz();
+	}
+
+	// YYYY-MM-DD of the router's day containing unix time t.
+	function ymd(t) {
+		var d = new Date((t + tz()) * 1000);
+		return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+	}
 
 	function csv(rows, name) {
 		var text = rows.map(function (r) {
-			return r.map(function (c) { c = String(c == null ? '' : c); return /[",\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c; }).join(',');
-		}).join('\n');
+			return r.map(function (c) {
+				c = String(c == null ? '' : c);
+				// A cell starting like a formula would run in Excel/LibreOffice
+				// (user names and comments come from staff input).
+				if (/^[=+\-@\t\r]/.test(c)) c = "'" + c;
+				return /[",\r\n]/.test(c) ? '"' + c.replace(/"/g, '""') + '"' : c;
+			}).join(',');
+		}).join('\r\n');
 		var a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/csv' })), download: name });
 		document.body.appendChild(a); a.click(); a.remove();
 	}
@@ -134,8 +154,10 @@
 					var b = {};
 					Object.keys(args).forEach(function (k) { b[k] = args[k]; });
 					b.force = true;
+					// Either way the dialog closes and the caller gets the outcome
+					// (and reports a failure once).
 					return hs(method, b).then(function (r) { if (r.warning) toast(r.warning, true); resolve(r); },
-						function (x) { reject(x); throw x; });
+						function (x) { reject(x); });
 				} }], function () { if (!done) resolve(null); });
 			});
 		});
@@ -150,10 +172,18 @@
 		function close() { if (closed) return; closed = true; bd.remove(); if (onClose) onClose(); }
 		var foot = h('div', { 'class': 'foot' }, h('button', { 'class': 'btn', type: 'button', onclick: close }, 'Cancel'));
 		(actions || []).forEach(function (a) {
-			foot.appendChild(h('button', { 'class': 'btn ' + (a.cls || 'primary'), type: 'button', onclick: function () {
+			var btn = h('button', { 'class': 'btn ' + (a.cls || 'primary'), type: 'button', onclick: function () {
+				// One request at a time: a double click must not save twice.
+				if (btn.disabled) return;
 				var r = a.run();
-				if (r && r.then) r.then(function (keep) { if (keep !== true) close(); }, fail); else if (r !== false) close();
-			} }, a.label));
+				if (r && r.then) {
+					btn.disabled = true;
+					r.then(function (keep) { btn.disabled = false; if (keep !== true) close(); },
+						function (e) { btn.disabled = false; fail(e); });
+				}
+				else if (r !== false) close();
+			} }, a.label);
+			foot.appendChild(btn);
 		});
 		bd.appendChild(h('div', { 'class': 'modal' }, h('h3', {}, title), body, foot));
 		document.body.appendChild(bd);
@@ -172,6 +202,10 @@
 	}
 
 	function select(options, value) {
+		// A current value missing from the list (profile renamed, RADIUS
+		// group) stays selectable instead of silently becoming the first.
+		if (value != null && value !== '' && !options.some(function (o) { return (Array.isArray(o) ? o[0] : o) === value; }))
+			options = options.concat([value]);
 		return h('select', {}, options.map(function (o) {
 			var v = Array.isArray(o) ? o[0] : o, l = Array.isArray(o) ? o[1] : o;
 			return h('option', { value: v, selected: v === value }, l);
@@ -196,7 +230,7 @@
 
 	function afterLogin() {
 		return Promise.all([hs('whoami'), hs('profiles')]).then(function (r) {
-			S.user = r[0].username; S.admin = r[0].admin;
+			S.user = r[0].username; S.admin = r[0].admin; S.tz = r[0].tz_offset;
 			S.profiles = r[1].user_profiles || {}; S.servers = r[1].servers || [];
 			render();
 		});
@@ -207,7 +241,8 @@
 		var p = input('password', '', { autocomplete: 'current-password', required: true });
 		var form = h('form', { onsubmit: function (e) {
 			e.preventDefault();
-			rpc('session', 'login', { username: u.value.trim(), password: p.value }).then(function (r) {
+			// rpcd's default is 300 s idle: too short to fill in a form.
+			rpc('session', 'login', { username: u.value.trim(), password: p.value, timeout: 3600 }).then(function (r) {
 				S.sid = r.ubus_rpc_session;
 				try { sessionStorage.setItem('hs.sid', S.sid); } catch (e) {}
 				return afterLogin();
@@ -297,8 +332,7 @@
 				var by = {}; r[1].rows.forEach(function (x) { by[x.key] = x; });
 				var days = [];
 				for (var i = 6; i >= 0; i--) {
-					var d = new Date((today - i * 86400) * 1000);
-					var k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+					var k = ymd(today - i * 86400);
 					days.push(by[k] || { key: k, sessions: 0, revenue: 0 });
 				}
 
@@ -366,15 +400,19 @@
 			h('div', { 'class': 'row', style: 'margin-top:10px' },
 				field('Valid for (from first use)', f.validity), field('Online time', f.limit_uptime), field('Data', f.limit_bytes_total),
 				field('Price', f.price), field('Note', f.comment, 'grow'),
-				h('button', { 'class': 'btn primary', onclick: function () {
+				h('button', { 'class': 'btn primary', onclick: function (ev) {
+					// A double click must not create two batches.
+					var btn = ev.currentTarget;
+					if (btn.disabled) return;
 					var a = {};
 					Object.keys(f).forEach(function (k) { a[k] = f[k].value.trim(); });
 					a.count = +a.count; a.length = +a.length;
+					btn.disabled = true;
 					hsCreate('voucher_create', a).then(function (r) {
 						if (!r) return;
 						toast(r.vouchers.length + ' vouchers created in ' + r.batch);
 						loadBatches();
-					}).catch(fail);
+					}).catch(fail).then(function () { btn.disabled = false; });
 				} }, 'Create'))));
 
 		var tbody = h('tbody');
@@ -459,8 +497,12 @@
 			var secs = +m[1] * { m: 60, h: 3600, d: 86400, w: 604800 }[m[2]];
 			var now = Math.floor(Date.now() / 1000);
 			var a = { name: u.name };
+			// Running: move the end. Not used yet: lengthen the validity that
+			// starts at first login. Used without any end: set one from now.
+			var used = u.used && (u.used.uptime || u.used.bytes_in || u.used.bytes_out);
 			if (u.expires) a.expires = String(Math.max(now, u.expires) + secs);
-			else a.validity = String((u.validity || 0) + secs);
+			else if (u.validity && !used) a.validity = String(u.validity + secs);
+			else a.expires = String(now + secs);
 			return hs('user_set', a).then(function () { toast('Extended'); done(); });
 		} }]);
 	}
@@ -526,8 +568,13 @@
 					h('button', { 'class': 'btn', onclick: function () { load(true); } }, 'Show more (' + (total - list.length) + ' left)')));
 		}
 
+		var seq = 0;
 		function load(append) {
+			// Only the newest search may draw: an older, slower answer must not
+			// replace it.
+			var my = ++seq;
 			hs('user_list', { offset: append ? list.length : 0, limit: 200, search: search.value.trim() }).then(function (r) {
+				if (my !== seq) return;
 				list = append ? list.concat(r.users) : r.users;
 				total = r.total || list.length;
 				draw();
@@ -576,8 +623,12 @@
 
 	/* History */
 
-	function dateInput(t) { var d = new Date(t * 1000); return input('date', d.toISOString().slice(0, 10)); }
-	function dateValue(el, end) { var d = new Date(el.value + 'T00:00:00'); return Math.floor(d.getTime() / 1000) + (end ? 86400 : 0); }
+	function dateInput(t) { return input('date', ymd(t)); }
+	// The router's midnight of the chosen date (+1 day for an inclusive end).
+	function dateValue(el, end) {
+		var p = el.value.split('-');
+		return Math.floor(Date.UTC(+p[0], +p[1] - 1, +p[2]) / 1000) - tz() + (end ? 86400 : 0);
+	}
 
 	function viewHistory(main) {
 		var now = Date.now() / 1000;
@@ -626,8 +677,8 @@
 		function preset(label, days) {
 			return h('button', { 'class': 'btn small', onclick: function () {
 				var t = dayStart(Date.now());
-				from.value = new Date((t - (days - 1) * 86400) * 1000).toISOString().slice(0, 10);
-				to.value = new Date(t * 1000).toISOString().slice(0, 10);
+				from.value = ymd(t - (days - 1) * 86400);
+				to.value = ymd(t);
 				load();
 			} }, label);
 		}

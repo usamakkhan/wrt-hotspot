@@ -42,7 +42,7 @@ r = nft.ruleset({
 });
 
 ok(index(r, 'set bypass_mac {\n\t\ttype ether_addr\n\t\telements = { 02:00:00:00:00:01 }') > 0, 'bypass mac in set');
-ok(index(r, 'set block6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\telements = { fd00::/64 }') > 0, 'block prefix in set');
+ok(index(r, 'set block6 {\n\t\ttype ipv6_addr\n\t\tflags interval\n\t\tauto-merge\n\t\telements = { fd00::/64 }') > 0, 'block prefix in set (auto-merge: overlaps must not fail the ruleset)');
 ok(index(r, 'elements = { 02:00:00:00:00:02 . 10.0.0.2 }') > 0, 'mac+ip pair');
 ok(index(r, 'iifname { "br-guest" } ether saddr 02:00:00:00:00:03 drop') > 0, 'server-scoped block rule');
 ok(index(r, '02:00:00:00:00:04') < 0, 'regular binding has no rule');

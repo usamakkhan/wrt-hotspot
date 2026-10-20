@@ -20,6 +20,7 @@ import { verify as operator_verify } from 'wrthotspot.operators';
 const MAX_CONN = 8;
 const IDLE_CLOSE = 600;		// seconds without a request
 const MAX_SENTENCE = 65536;
+const FAIL_LIMIT = 5, FAIL_WINDOW = 60;	// failed logins per address, seconds
 
 /* ---------- wire format ---------- */
 
@@ -247,6 +248,8 @@ function server(opts) {
 	let cfg = () => core.config();
 	let conns = {};
 	let user_ids = {}, next_user_id = 1;	// RouterOS-style ids for local users
+	let mac_ids = {}, next_mac_id = 1;	// stable ids for hosts and cookies (by MAC)
+	let failed = {};			// address -> { n, at }: failed logins
 	let rates = {};				// session id -> { t, in, out, rin, rout }
 
 	let lsock = socket.create(socket.AF_INET6, socket.SOCK_STREAM | socket.SOCK_NONBLOCK);
@@ -282,7 +285,15 @@ function server(opts) {
 			if (!net || !ip || length(net) != length(ip))
 				continue;
 
-			let bits = (p[1] != null) ? int(p[1]) : length(net) * 8;
+			// A malformed prefix length ("10.0.0.0/", "/abc") must not match
+			// everything: skip the entry.
+			let bits = length(net) * 8;
+			if (p[1] != null) {
+				if (!match(p[1], /^[0-9]{1,3}$/) || int(p[1]) > bits)
+					continue;
+				bits = int(p[1]);
+			}
+
 			let ok = true;
 
 			for (let i = 0; i < length(net) && bits > 0; i++, bits -= 8) {
@@ -366,11 +377,16 @@ function server(opts) {
 		}));
 	}
 
-	function host_items() {
-		let i = 0;
+	// Ids stay with the device: a list position would point at another
+	// client once a host comes or goes between a print and a remove.
+	function mac_id(key) {
+		mac_ids[key] ??= next_mac_id++;
+		return ros_id(mac_ids[key]);
+	}
 
+	function host_items() {
 		return map(core.hosts(), (h) => ({
-			'.id': ros_id(++i),
+			'.id': mac_id(`h ${h.mac}`),
 			'mac-address': ros_mac(h.mac), address: sort(keys(h.ip4 ?? {}))[0] ?? (h.ipv4?.[0] ?? ''),
 			'to-address': sort(keys(h.ip4 ?? {}))[0] ?? (h.ipv4?.[0] ?? ''),
 			server: h.server ?? '', authorized: ros_bool(h.authorized), bypassed: 'false',
@@ -477,12 +493,12 @@ function server(opts) {
 	}
 
 	function cookie_items() {
-		let c = core.cookies(), i = 0, out = [];
+		let c = core.cookies(), out = [];
 
 		for (let x in c.mac_cookies)
-			push(out, { '.id': ros_id(++i), user: x.user, 'mac-address': ros_mac(x.mac), 'expires-in': ros_dur(x.expires_in), 'mac-cookie': 'true' });
+			push(out, { '.id': mac_id(`m ${x.mac}`), user: x.user, 'mac-address': ros_mac(x.mac), 'expires-in': ros_dur(x.expires_in), 'mac-cookie': 'true' });
 		for (let x in c.cookies)
-			push(out, { '.id': ros_id(++i), user: x.user, 'mac-address': ros_mac(x.mac), 'expires-in': ros_dur(x.expires_in), 'mac-cookie': 'false' });
+			push(out, { '.id': mac_id(`c ${x.mac} ${x.user}`), user: x.user, 'mac-address': ros_mac(x.mac), 'expires-in': ros_dur(x.expires_in), 'mac-cookie': 'false' });
 
 		return out;
 	}
@@ -652,7 +668,8 @@ function server(opts) {
 		if (menu == '/ip/hotspot/host' || menu == '/ip/hotspot/cookie') {
 			let items = LISTS[menu]();
 			for (let id in r) {
-				let it = filter(items, (x) => x['.id'] == id)[0];
+				// by id, or by MAC address as RouterOS also accepts
+				let it = filter(items, (x) => x['.id'] == id || x['mac-address'] == uc(id))[0];
 				if (!it)
 					return trap('no such item', 0);
 
@@ -820,6 +837,17 @@ function server(opts) {
 
 		log('warn', 'API: failed login for "%s" from %s', a.name ?? '', c.peer);
 		c.closing = ++c.failures >= 3;
+
+		// Per address: after a few failures in a row, refuse it for a while.
+		let f = failed[c.peer] ?? { n: 0, at: 0 };
+		f = (time() - f.at > FAIL_WINDOW) ? { n: 1, at: time() } : { n: f.n + 1, at: f.at };
+		failed[c.peer] = f;
+
+		if (f.n >= FAIL_LIMIT) {
+			log('warn', 'API: %d failed logins from %s, refusing it for %d s', f.n, c.peer, FAIL_WINDOW);
+			c.closing = true;
+		}
+
 		return trap('invalid user name or password (6)', null);
 	}
 
@@ -850,11 +878,21 @@ function server(opts) {
 
 	on_event = function(c, ev) {
 		if (ev & uloop.ULOOP_READ) {
+			let got = false;
+
 			while (true) {
 				let data = c.sock.recv(16384);
 
+				// Readable but nothing to read: the connection failed (reset).
+				if (data == null && !got) {
+					close_conn(c);
+					return;
+				}
+
 				if (data == null)
 					break;
+
+				got = true;
 
 				if (data == '') {
 					close_conn(c);
@@ -885,6 +923,13 @@ function server(opts) {
 
 				if (length(s[0]))
 					on_request(c, s[0]);
+
+				// Failed login, not logged in, /quit: nothing queued behind it may
+				// run (pipelined password guesses, commands after a bad login).
+				if (c.closing) {
+					c.buf = '';
+					break;
+				}
 			}
 		}
 
@@ -903,8 +948,12 @@ function server(opts) {
 			if (substr(addr, 0, 7) == '::ffff:')
 				addr = substr(addr, 7);
 
-			if (!allowed(addr) || length(keys(conns)) >= MAX_CONN) {
-				log('warn', 'API: connection from %s refused (%s)', addr, length(keys(conns)) >= MAX_CONN ? 'too many' : 'not in api_allow');
+			let fl = failed[addr];
+			let blocked = fl && fl.n >= FAIL_LIMIT && time() - fl.at <= FAIL_WINDOW;
+
+			if (!allowed(addr) || blocked || length(keys(conns)) >= MAX_CONN) {
+				log('warn', 'API: connection from %s refused (%s)', addr,
+					!allowed(addr) ? 'not in api_allow' : blocked ? 'too many failed logins' : 'too many connections');
 				cs.close();
 				continue;
 			}
@@ -926,6 +975,16 @@ function server(opts) {
 		for (let fd, c in conns)
 			if (now - c.seen > IDLE_CLOSE)
 				close_conn(c);
+
+		for (let a, f in failed)
+			if (now - f.at > FAIL_WINDOW)
+				delete failed[a];
+
+		// Random MACs would grow the id map forever; starting over only
+		// renumbers (billing systems print before they remove).
+		if (length(keys(mac_ids)) > 20000)
+			mac_ids = {};
+
 		idle_timer.set(30000);
 	});
 

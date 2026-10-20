@@ -172,6 +172,32 @@ r = call(c, [ '/quit' ]);
 check('/quit ends the session', r[0]?.type == '!fatal');
 c.s.close();
 
+// Pipelined password guesses: after a failed login nothing queued behind it
+// may run, and the connection ends after three failures.
+c = connect();
+let burst = '';
+for (let i = 0; i < 10; i++)
+	burst += rosapi.sentence([ '/login', '=name=billing', `=password=guess${i}` ]);
+burst += rosapi.sentence([ '/ip/hotspot/user/print' ]);
+c.s.send(burst);
+let traps = 0, rows = 0;
+for (let n = 0; n < 40; n++) {
+	let p = rosapi.next_sentence(c.buf);
+	if (p == null) {
+		let d = c.s.recv(65536);
+		if (d == null || d == '')
+			break;
+		c.buf += d;
+		continue;
+	}
+	c.buf = substr(c.buf, p[1]);
+	if (p[0][0] == '!trap') traps++;
+	if (p[0][0] == '!re') rows++;
+}
+check('pipelined guesses: at most 3 tries per connection', traps <= 3, `(${traps} refused)`);
+check('pipelined guesses: commands behind them never run', rows == 0);
+c.s.close();
+
 // Address restriction: only the allow list may connect.
 sh("uci add_list wrthotspot.global.api_allow=192.0.2.1; uci commit wrthotspot");
 conn.call('wrthotspot', 'reload', {});

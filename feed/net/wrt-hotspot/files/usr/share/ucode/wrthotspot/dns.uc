@@ -129,7 +129,8 @@ export function apply_dnsmasq(cfg, devices) {
 	return changed;
 };
 
-export function remove_dnsmasq() {
+// sync: restart now (no uloop, e.g. from the CLI when the service is disabled).
+export function remove_dnsmasq(sync) {
 	let changed = false;
 
 	for (let dir in conf_dirs()) {
@@ -137,8 +138,38 @@ export function remove_dnsmasq() {
 			changed = true;
 	}
 
-	if (changed)
+	if (changed && sync)
+		system('/etc/init.d/dnsmasq restart >/dev/null 2>&1');
+	else if (changed)
 		uloop.process('/etc/init.d/dnsmasq', [ 'restart' ], {}, () => {});
+
+	return changed;
+};
+
+// Withdraw our RFC 8910 URI (ours end in /api/captive) from every DHCP section.
+export function remove_odhcpd(sync) {
+	let c = cursor();
+	c.load('dhcp');
+	let changed = false;
+
+	c.foreach('dhcp', 'dhcp', (s) => {
+		if (match(s.captive_portal_uri ?? '', /\/api\/captive$/)) {
+			c.delete('dhcp', s['.name'], 'captive_portal_uri');
+			changed = true;
+		}
+	});
+
+	if (changed) {
+		c.save('dhcp');
+		c.commit('dhcp');
+
+		if (sync)
+			system('/etc/init.d/odhcpd reload >/dev/null 2>&1');
+		else
+			uloop.process('/etc/init.d/odhcpd', [ 'reload' ], {}, () => {});
+	}
+
+	return changed;
 };
 
 // odhcpd announces the RFC 8910 URI in RAs and DHCPv6 (and DHCPv4 where it

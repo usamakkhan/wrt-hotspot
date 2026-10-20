@@ -121,7 +121,7 @@ return view.extend({
 		o.modalonly = true;
 
 		o = s.taboption('general', form.Flag, 'transparent_proxy', _('Transparent HTTP proxy'),
-			_('Plain HTTP of logged-in clients goes through a proxy (MikroTik transparent-proxy). The proxy must accept intercepted traffic, e.g. squid with <code>http_port 3128 intercept</code>.'));
+			_('Plain HTTP of logged-in clients goes through a proxy (MikroTik transparent-proxy). The proxy must accept intercepted traffic, e.g. squid with <code>http_port 3128 intercept</code>. Traffic through a proxy on this router does not count toward data limits.'));
 		o.modalonly = true;
 
 		o = s.taboption('general', form.Value, 'http_proxy', _('HTTP proxy'),

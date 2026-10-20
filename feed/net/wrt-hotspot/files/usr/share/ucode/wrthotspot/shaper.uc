@@ -51,7 +51,8 @@ function parse_rate_limit_uncached(s) {
 	let burst = pair(f[1], parse_rate);
 	let thr = pair(f[2], parse_rate);
 	let tm = pair(f[3], (x) => (x != null && match(x, /^[0-9]+s?$/)) ? int(x) : null);
-	let prio = (f[4] != null) ? int(f[4]) : 8;
+	// (int("x") is NaN, which every comparison lets through: check the text)
+	let prio = (f[4] == null) ? 8 : match(f[4], /^[1-8]$/) ? int(f[4]) : 0;
 	let min = pair(f[5], parse_rate);
 
 	if (rate[0] == null || rate[1] == null || (f[1] && (burst[0] == null || burst[1] == null)) ||
@@ -129,6 +130,13 @@ function hx(n) {
 	return sprintf('%x', n);
 }
 
+// tc ids per tree: root class 1:1, default class 1:ffff (leaf fffe:), ingress
+// ffff:. Session N uses class/filter/leaf number N+1 (2..0xfff0), so slot 1
+// can never touch the root class (nft.MAX_SLOT keeps N+1 below 0xfff1).
+function session_id(slot) {
+	return hx(slot + 1);
+}
+
 function quantum(bps) {
 	// HTB wants quantum >= MTU and not huge; rate/8/10 clamped.
 	return max(1600, min(int(bps / 80), 60000));
@@ -173,7 +181,9 @@ export function tc_backend(state_dir) {
 			`class add dev ${dev} parent 1: classid 1:1 htb rate ${c} ceil ${c} quantum 60000`,
 			// Unshaped traffic (unauthenticated, bypassed, unlimited users).
 			`class add dev ${dev} parent 1:1 classid 1:ffff htb rate ${int(cap / 100)}bit ceil ${c} prio 7 quantum 60000`,
-			`qdisc add dev ${dev} parent 1:ffff fq_codel`,
+			// Explicit handle: an automatic one (8001: and up) could equal a
+			// session leaf's handle.
+			`qdisc add dev ${dev} parent 1:ffff handle fffe: fq_codel`,
 		];
 	}
 
@@ -235,11 +245,11 @@ export function tc_backend(state_dir) {
 		set_session: function(dev, slot, mac, limits, ceil) {
 			let d = devs[dev];
 
-			if (!d || slot >= 0xfffe)
+			if (!d || slot < 1 || slot > 0xffef)
 				return 'no shaper on device';
 
 			let lines = [];
-			let cls = hx(slot), leaf = hx(slot + 1);
+			let cls = session_id(slot), leaf = cls;	// class minor and leaf major
 
 			for (let side in [ [ dev, 'tx', 'dst_mac' ], [ d.ifb, 'rx', 'src_mac' ] ]) {
 				let l = limits[side[1]];
@@ -276,7 +286,7 @@ export function tc_backend(state_dir) {
 			if (!d)
 				return null;
 
-			let cls = hx(slot);
+			let cls = session_id(slot);
 			let lines = [];
 
 			for (let x in [ dev, d.ifb ]) {
