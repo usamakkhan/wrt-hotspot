@@ -147,22 +147,29 @@ both sets.
 
 ### Install from the feed
 
-The feeds are published as assets of the GitHub release
-([releases](https://github.com/usamakkhan/wrt-hotspot/releases)): upload the files of `dist/24.10.8/`
-and `dist/25.12.6/` (except `index.json`) to the release, e.g. `v0.8.1`. Then on the router:
+The feeds are published as assets of the GitHub releases
+([releases](https://github.com/usamakkhan/wrt-hotspot/releases)). The `latest` URL always serves the
+newest release, so routers set up this way get every update with `apk upgrade` / `opkg upgrade`:
 
 ```sh
 # 25.12 (apk)
-wget -O /etc/apk/keys/wrthotspot.pem https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.1/wrthotspot.pem
-echo https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.1/packages.adb >> /etc/apk/repositories.d/customfeeds.list
+wget -O /etc/apk/keys/wrthotspot.pem https://github.com/usamakkhan/wrt-hotspot/releases/latest/download/wrthotspot.pem
+echo https://github.com/usamakkhan/wrt-hotspot/releases/latest/download/packages.adb >> /etc/apk/repositories.d/customfeeds.list
 apk update && apk add wrt-hotspot-full
 
 # 24.10 (opkg)
-wget -O /tmp/wrthotspot.pub https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.1/dcedbf2d84a0ef59
+wget -O /tmp/wrthotspot.pub https://github.com/usamakkhan/wrt-hotspot/releases/latest/download/dcedbf2d84a0ef59
 opkg-key add /tmp/wrthotspot.pub
-echo 'src/gz wrthotspot https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.8.1' >> /etc/opkg/customfeeds.conf
+echo 'src/gz wrthotspot https://github.com/usamakkhan/wrt-hotspot/releases/latest/download' >> /etc/opkg/customfeeds.conf
 opkg update && opkg install wrt-hotspot-full
 ```
+
+To stay on one version instead, use `releases/download/v0.8.1/` in place of `releases/latest/download/`.
+
+**Publishing a release:** build both feeds (`scripts/build-packages.sh`), create the release with every
+file of `dist/24.10.8/` and `dist/25.12.6/` except `index.json`, and mark it Latest. Then also upload
+the new packages and index files (`Packages*`, `packages.adb`) with `--clobber` to the older releases
+(from v0.8.0 on): routers that were set up with a versioned URL then see the update too.
 
 Release downloads only work without a login while the repository is public; for a private
 repository, serve the `dist/<release>/` directory from your own web server instead and use its URL.

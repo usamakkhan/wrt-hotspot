@@ -4,6 +4,8 @@
 
 Bug-fix release from a full review of 0.8.0. Upgrading is recommended for everyone.
 
+Feeds: the README now installs from `releases/latest/download/`, which always serves the newest release. The v0.8.0 feed URL also serves 0.8.1, so routers set up with it upgrade with a plain `apk upgrade` / `opkg upgrade`.
+
 ### Security
 
 - **Portal:** `dst=` only accepts plain `http(s)://` addresses, so a crafted `javascript:` link can no longer run script on the portal. CR/LF can no longer reach a response header, which blocked response splitting.
