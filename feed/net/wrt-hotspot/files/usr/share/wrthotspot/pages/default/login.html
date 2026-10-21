@@ -35,6 +35,7 @@ function doLogin() {
 	$(if trial == yes)
 	<a class="btn secondary" href="$(link-login-only)?dst=$(link-orig-esc)&amp;trial=yes">Free trial</a>
 	$(endif)
+	$(if link-admin)<a class="btn secondary" href="$(link-admin)">Router settings</a>$(endif)
 	<div class="foot">$(mac)</div>
 </div>
 </body></html>

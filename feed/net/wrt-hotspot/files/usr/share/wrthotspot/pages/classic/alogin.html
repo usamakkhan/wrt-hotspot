@@ -16,6 +16,7 @@
 		<p class="info">You are logged in, $(username)<br>Redirecting&hellip;</p>
 		<a class="button" href="$(link-redirect)">Continue</a>
 		<a class="button ghost" href="$(link-status)">Status</a>
+		$(if link-admin)<a class="button ghost" href="$(link-admin)">Router settings</a>$(endif)
 		<p class="info bt">Powered by <a href="https://openwrt.org/">OpenWrt</a> &middot; <a href="https://github.com/usamakkhan/wrt-hotspot">WrtHotspot</a></p>
 	</div>
 </main>

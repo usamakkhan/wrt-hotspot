@@ -336,6 +336,14 @@ setup
 check "hotspotd answers on ubus" ubus call wrthotspot status
 check "dataplane table present" nft list table inet wrthotspot
 check "client reaches the portal" page_has "$P/login" "Sign in"
+if [ -e /www/cgi-bin/luci ]; then
+	router_admin_link() { C curl -fsS -m 5 http://10.99.0.1:8002/login | grep -q 'http://10.99.0.1/admin/'; }
+	router_admin_redirect() { C curl -s -m 5 -o /dev/null -w '%{redirect_url}' http://10.99.0.1:8002/admin | grep -qx 'http://10.99.0.1/admin/'; }
+	router_admin_page() { C curl -fsS -m 5 http://10.99.0.1/admin/ | grep -q '/cgi-bin/luci/'; }
+	check "portal links to router settings" router_admin_link
+	check "portal admin path redirects to router settings" router_admin_redirect
+	check "hotspot client can reach router settings shortcut" router_admin_page
+fi
 
 echo "== unauthenticated"
 check_not "IPv4 web blocked" online4

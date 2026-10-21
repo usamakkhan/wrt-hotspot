@@ -25,6 +25,7 @@ $(if refresh-timeout-secs)<meta http-equiv="refresh" content="$(refresh-timeout-
 		<form action="$(link-logout)" method="post">
 			<input type="submit" value="Log out">
 		</form>
+		$(if link-admin)<a class="button ghost" href="$(link-admin)">Router settings</a>$(endif)
 		<p class="info bt">Powered by <a href="https://openwrt.org/">OpenWrt</a> &middot; <a href="https://github.com/usamakkhan/wrt-hotspot">WrtHotspot</a></p>
 	</div>
 </main>

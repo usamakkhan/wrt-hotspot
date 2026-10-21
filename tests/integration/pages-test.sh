@@ -50,6 +50,9 @@ rm -rf /etc/wrthotspot/pages/hstest1
 
 echo "== listing"
 check "built-in sets: classic and default" builtins_listed
+if [ -e /www/cgi-bin/luci ]; then
+	check "default page links router settings" page_has /login 'Router settings'
+fi
 check "limits reported" limits_listed
 
 echo "== upload rules"
@@ -124,6 +127,9 @@ check "a replaced static file is served new" page_has /css/site.css 'color:blue'
 echo "== classic set"
 use_dir /usr/share/wrthotspot/pages/classic
 check "classic login page links the project" page_has /login 'github.com/usamakkhan/wrt-hotspot'
+if [ -e /www/cgi-bin/luci ]; then
+	check "classic page links router settings" page_has /login 'Router settings'
+fi
 check "classic stylesheet" type_is /css/style.css text/css
 check "classic logo" type_is /img/logo.svg image/svg
 check "classic md5.js" type_is /md5.js application/javascript

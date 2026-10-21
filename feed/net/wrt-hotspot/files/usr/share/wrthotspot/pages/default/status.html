@@ -17,5 +17,6 @@ $(if refresh-timeout-secs)<meta http-equiv="refresh" content="$(refresh-timeout-
 		<tr><td>Downloaded</td><td>$(bytes-out-nice)</td></tr>
 	</table>
 	<form action="$(link-logout)" method="post"><button type="submit">Log out</button></form>
+	$(if link-admin)<a class="btn secondary" href="$(link-admin)">Router settings</a>$(endif)
 </div>
 </body></html>

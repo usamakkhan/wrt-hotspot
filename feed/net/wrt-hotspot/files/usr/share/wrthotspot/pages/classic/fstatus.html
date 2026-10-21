@@ -12,6 +12,7 @@
 		<img class="logo" src="img/logo.svg" alt="OpenWrt">
 		<p class="info">You are not logged in</p>
 		<a class="button" href="$(link-login-only)">Log in</a>
+		$(if link-admin)<a class="button ghost" href="$(link-admin)">Router settings</a>$(endif)
 	</div>
 </main>
 </body>

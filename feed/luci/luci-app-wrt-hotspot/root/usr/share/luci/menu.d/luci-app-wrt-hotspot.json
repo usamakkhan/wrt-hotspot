@@ -18,6 +18,12 @@
 		"action": { "type": "view", "path": "wrthotspot/status" }
 	},
 
+	"admin/services/wrthotspot/wizard": {
+		"title": "Quick Setup",
+		"order": 15,
+		"action": { "type": "view", "path": "wrthotspot/wizard" }
+	},
+
 	"admin/services/wrthotspot/users": {
 		"title": "Users",
 		"order": 20,

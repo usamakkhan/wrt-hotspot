@@ -181,6 +181,10 @@ function setup(net) {
 		c.delete('firewall', sid);
 
 	push(rules, { name: 'Portal', proto: 'tcp', dest_port: want_portal });
+	// The main uhttpd instance serves LuCI. The portal's router-settings link
+	// needs this rule when the hotspot has its own input=REJECT firewall zone.
+	if (fs.access('/www/cgi-bin/luci'))
+		push(rules, { name: 'Admin', proto: 'tcp', dest_port: '80 443' });
 
 	// A transparent proxy on the router needs its port open like the portal.
 	let proxy_ports = {};

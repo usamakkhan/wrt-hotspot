@@ -33,6 +33,21 @@ The package build uses the official SDK for each release and produces architectu
 
 These numbers describe the recorded suites, not a new test run for this documentation rewrite.
 
+### Reproduce the functional suites
+
+Run these on a dedicated OpenWrt test router with the matching packages and test dependencies. `netns-test.sh keep` sets up the temporary bridge and namespaces used by later suites; do not run it on a production router. The [test scripts](../tests/integration/netns-test.sh) document their additional dependencies and cleanup behavior.
+
+| Result in this report | Source test | Invocation after installing the test files |
+|---|---|---|
+| Unit and nftables syntax | `tests/run-unit.sh` | `sh tests/run-unit.sh` |
+| Network namespace integration | `tests/integration/netns-test.sh` | `sh tests/integration/netns-test.sh keep` |
+| Panel API, capacity, regression | Corresponding `*-test.sh` files | `sh tests/integration/panel-api-test.sh`, `sh tests/integration/capacity-test.sh`, `sh tests/integration/regression-test.sh` |
+| RouterOS API | `rosapi-test.uc`, `rosapi-librouteros.py` | `ucode tests/integration/rosapi-test.uc`; run the Python client as directed in its source |
+| 150-client traffic | `traffic-test.sh` | `sh tests/integration/traffic-test.sh 150 1M/4M 1024` |
+| 2,000-session control plane | `load-test.uc` | `ucode tests/integration/load-test.uc 2000 2M/10M` |
+
+The historical x86 numbers span 0.7.0 and 0.8.1, while the QEMU table below records 0.9.0-era runs. This repository does not include immutable per-run logs or package hashes for every historical measurement, so these commands rerun the corresponding tests but cannot guarantee byte-for-byte reproduction of the reported figures. Keep the source commit, feed files, router image, configuration and raw logs together for future benchmark releases.
+
 ## Real-traffic concurrency on x86
 
 `tests/integration/traffic-test.sh N [rate] [KiB]` gives each simulated client its own network namespace, MAC and IPv4/IPv6 addresses. Clients reach the portal, log in with vouchers, download 1 MiB over each IP family through the HTB shaper at a configured `1M/4M` rate, then log out. The reported rates are per-download observations, not aggregate capacity.
@@ -105,6 +120,8 @@ sh tests/emu/emu.sh status malta
 ```
 
 The script also supports `malta24`, `armv8` and `armv7`. See its usage output for options and prerequisites.
+
+`emu.sh` defaults to the project's `latest` feed, which changes over time. Set its `FEED` environment variable to an archived copy of the exact signed feed when comparing against a historical release, and record the image and source commit used. A versioned GitHub release feed URL is not a fixed archive: the project release script refreshes older feed URLs with current packages.
 
 ## Work remaining
 

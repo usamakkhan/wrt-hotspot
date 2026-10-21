@@ -42,11 +42,16 @@ Common variables:
   identity, hostname, server-name, ip, mac, ipv6, username, error,
   logged-in (yes/no), trial (yes/no), login-by,
   link-login, link-login-only, link-logout, link-status, link-orig,
-  link-orig-esc, link-redirect, mac-esc, user-esc,
+  link-orig-esc, link-redirect, link-admin, mac-esc, user-esc,
   chap-id, chap-challenge, plain-passwd, ssl-login,
   uptime, uptime-secs, session-time-left, session-time-left-secs,
   idle-timeout, bytes-in, bytes-out, bytes-in-nice, bytes-out-nice,
   remain-bytes-in, remain-bytes-out, refresh-timeout, refresh-timeout-secs
+
+  link-admin is http://<router IP>/admin/ when LuCI is installed, or empty
+  otherwise. The built-in pages show a Router settings link only when set.
+  The shortcut opens LuCI's own login page; hotspot credentials do not grant
+  router administration access.
 
 Login form fields (POST to $(link-login-only)):
   username, password, dst = $(link-orig)

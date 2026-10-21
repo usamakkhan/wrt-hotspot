@@ -41,6 +41,8 @@ jobs:
           [ -z "$bad" ] || { echo "not executable in git (git update-index --chmod=+x):"; echo "$bad"; exit 1; }
       - name: JSON files
         run: find feed -name '*.json' -print0 | xargs -0 -n1 python3 -m json.tool > /dev/null
+      - name: documentation links and fences
+        run: python3 .github/check-docs
       - name: JavaScript syntax
         run: |
           for f in $(find feed -name '*.js'); do

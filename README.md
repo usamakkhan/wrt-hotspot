@@ -7,6 +7,8 @@ WrtHotspot is a dual-stack captive portal for OpenWrt 24.10 and 25.12. It provid
 - [Releases](https://github.com/usamakkhan/wrt-hotspot/releases) and [issues](https://github.com/usamakkhan/wrt-hotspot/issues)
 - [Architecture](docs/architecture.md)
 - [Billing and RADIUS integration](docs/billing-integration.md)
+- [Production security setup](docs/production-security.md)
+- [Upgrades and backups](docs/upgrades.md)
 - [Qualification and benchmarks](docs/qualification.md)
 - [Research notes](docs/research.md)
 - [Changelog](CHANGELOG.md)
@@ -65,7 +67,11 @@ wrthotspot status
 
 `setup` requires an existing interface in `/etc/config/network`. It adds a hotspot server and firewall access. For a static network with no DHCP section, it also adds DHCPv4, RA and DHCPv6 service. It disables flow offloading, which would bypass hotspot accounting and limits. Connect a client to the network and open an HTTP page to reach the login portal. Replace the example credentials before use.
 
+The built-in portal pages show **Router settings** when LuCI is installed. It opens `http://<router-ip>/admin/`, which forwards to LuCI's login page. Run `wrthotspot setup <network>` again after upgrading an existing hotspot so its firewall zone allows access to the router web server on ports 80 and 443. Anyone on that hotspot network can then reach the LuCI login page, but must still authenticate with router credentials. The portal also redirects its own `/admin` path to this shortcut.
+
 Configure the service in **Services > Hotspot** in LuCI. If `wrt-hotspot-panel` is installed, the staff panel is at `http://<router>/hotspot/`. Create a panel account with `wrthotspot operator add <user> operator` or use `admin` for panel administration. The CLI prompts for its password.
+
+For a guided first setup, open **Services > Hotspot > Quick Setup**. Choose an existing network and select **Save and Apply** to create its hotspot server, firewall rules and DHCP service. Then set the default portal login options and default user limits on the next two steps, using **Save and Apply** on each page. Finish by adding users and running Diagnostics. The wizard uses the default server and user profiles; the Servers and User Profiles pages offer the full set of options.
 
 If the client does not reach the portal, run `wrthotspot check` first. It reports the daemon, firewall zone, forwarding, DHCP, portal listener, nftables table and flow-offload state. `wrthotspot status` shows sessions and capacity. For daemon messages, use `logread -e hotspotd`. A client still needs an address from the hotspot network; `setup` only creates DHCP automatically for an eligible static interface.
 
@@ -81,7 +87,7 @@ If the client does not reach the portal, run `wrthotspot check` first. It report
 
 A transparent HTTP proxy configured on the router does not contribute forwarded traffic to hotspot accounting. Place the proxy on another host if its traffic must count toward users' data limits.
 
-The default server profile enables HTTP-CHAP, HTTP-PAP and cookies. HTTPS login and RFC 8908/8910 announcements require a portal certificate and matching `dns_name`. `wrthotspot cert <dns-name>` creates a self-signed certificate for testing; browsers will warn about it. Use a trusted certificate for production, set the server profile's `dns_name`, enable `https` in `login_by`, then reload the service. `wrthotspot check` reports missing certificate or TLS dependencies.
+The default server profile enables HTTP-CHAP, HTTP-PAP and cookies. Set up a trusted portal certificate and HTTPS password login before a production rollout; HTTP-PAP sends the password over HTTP. The [production security guide](docs/production-security.md) covers the certificate, login methods, management access and verification steps.
 
 <a id="custom-login-pages"></a>
 
@@ -90,6 +96,8 @@ The default server profile enables HTTP-CHAP, HTTP-PAP and cookies. HTTPS login 
 Open **Services > Hotspot > Login Pages** in LuCI and download the `classic` sample. A page set needs `login.html`; it may also contain the other login, status and logout pages, CSS, JavaScript, fonts and images. Edit the sample, zip its contents, upload the archive and select the set for a server profile.
 
 The upload accepts HTML, CSS, JS, PNG, JPEG, GIF, SVG, ICO, WebP, WOFF, WOFF2, JSON and TXT. Limits are 512 KiB per file, 2 MiB and 200 files per set. The router checks the entire upload before installing it under `/etc/wrthotspot/pages/`; uploaded sets survive sysupgrade. Missing pages fall back to the built-in defaults. RouterOS hotspot page sets can be uploaded; files outside WrtHotspot's page set are retained but ignored.
+
+Custom pages can use `$(link-admin)` for the router-settings shortcut. It is empty if LuCI is unavailable; wrap the link in `$(if link-admin)…$(endif)` as the built-in pages do. The `classic` sample's README lists the other supported variables.
 
 ## Build and test
 
@@ -108,7 +116,7 @@ Run `sh tests/run-unit.sh` with ucode and its filesystem module. If nftables is 
 
 ## Upgrades
 
-Use `apk upgrade` on 25.12 or `opkg upgrade` on 24.10 after configuring the feed. Install `wrt-hotspot-radius` separately if upgrading an older file-installed setup that used RADIUS. The [upgrade test](tests/integration/upgrade-test.sh) covers preservation of sessions, users and configuration across the tested versions.
+Use `apk upgrade` on 25.12 or `opkg upgrade` on 24.10 after configuring the feed. Install `wrt-hotspot-radius` separately if upgrading an older file-installed setup that used RADIUS. The [upgrade test](tests/integration/upgrade-test.sh) covers preservation of sessions, users and configuration across the tested package versions. An OpenWrt firmware sysupgrade has different backup and reinstall requirements; follow [Upgrades and backups](docs/upgrades.md) before flashing.
 
 ## License and trademarks
 

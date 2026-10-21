@@ -138,6 +138,13 @@ function origin(scheme, host, port) {
 	return `${scheme}://${host}${(port == dflt) ? '' : `:${port}`}`;
 }
 
+function router_admin_url(addr) {
+	if (!addr || !fs.access('/www/cgi-bin/luci'))
+		return '';
+	let host = (ip_family(addr) == 6) ? `[${addr}]` : addr;
+	return `${origin('http', host, 80)}/admin/`;
+}
+
 // Where to send the client after login: only plain http(s) URLs with a host.
 // "javascript:" and friends would run on the portal's origin, and control
 // characters would end up in the Location header.
@@ -238,6 +245,7 @@ function variables(ctx, extra) {
 		'link-status': `${ctx.base}/status`,
 		'link-orig': ctx.dst, 'link-orig-esc': urlencode(ctx.dst),
 		'link-redirect': `${base}/login?dst=${urlencode(ctx.dst)}`,
+		'link-admin': router_admin_url(ctx.server_addr),
 		// CHAP is pointless (and MikroTik disables it) when the form goes over TLS.
 		'chap-id': ('http-chap' in ctx.sp.login_by && !ctx.https_login) ? c?.chap_id : '',
 		'chap-challenge': ('http-chap' in ctx.sp.login_by && !ctx.https_login) ? c?.chap_challenge : '',
@@ -372,6 +380,17 @@ global.handle_request = function(env) {
 			redirect(`${ctx.login_base}/login?dst=${urlencode(orig)}`);
 		}
 
+		return;
+	}
+
+	// A direct visit to the portal's address on its own port should still
+	// provide a route to LuCI, without confusing it with a login request.
+	if (path == '/admin' || path == '/admin/') {
+		let admin = router_admin_url(ctx.server_addr);
+		if (admin)
+			redirect(admin);
+		else
+			send_response('404 Not Found', { 'Content-Type': 'text/plain' }, 'Router settings are unavailable');
 		return;
 	}
 

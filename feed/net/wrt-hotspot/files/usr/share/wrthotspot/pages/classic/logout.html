@@ -21,6 +21,7 @@
 			<tr><td>Bytes up/down:</td><td>$(bytes-in-nice) / $(bytes-out-nice)</td></tr>
 		</table>
 		<a class="button" href="$(link-login-only)">Log in</a>
+		$(if link-admin)<a class="button ghost" href="$(link-admin)">Router settings</a>$(endif)
 		<p class="info bt">Powered by <a href="https://openwrt.org/">OpenWrt</a> &middot; <a href="https://github.com/usamakkhan/wrt-hotspot">WrtHotspot</a></p>
 	</div>
 </main>

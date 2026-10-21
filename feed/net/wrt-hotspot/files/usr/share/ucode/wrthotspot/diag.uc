@@ -60,17 +60,21 @@ export function run_checks(cfg, state) {
 		if (!srv.interface)
 			continue;
 
-		let zone = null, fwd = false, portal_rule = false, dhcp = false;
+		let zone = null, zone_input = null, fwd = false, portal_rule = false, admin_rule = false, dhcp = false;
 
 		c.foreach('firewall', 'zone', (z) => {
 			let nets = (type(z.network) == 'array') ? z.network : split(z.network ?? '', ' ');
-			if (srv.interface in nets)
+			if (srv.interface in nets) {
 				zone = z.name;
+				zone_input = z.input;
+			}
 		});
 		c.foreach('firewall', 'forwarding', (f) => { if (zone && f.src == zone && f.dest == 'wan') fwd = true; });
 		c.foreach('firewall', 'rule', (r) => {
 			if (r.src == zone && index(`${r.dest_port ?? ''}`, `${cfg.global.portal_port}`) >= 0)
 				portal_rule = true;
+			if (r.src == zone && r.name == `Allow-${zone}-Admin` && '80' in split(`${r.dest_port ?? ''}`, ' '))
+				admin_rule = true;
 		});
 		c.foreach('dhcp', 'dhcp', (d) => { if (d.interface == srv.interface && d.ignore != '1') dhcp = true; });
 
@@ -83,6 +87,14 @@ export function run_checks(cfg, state) {
 		add(`dhcp:${name}`, dhcp ? 'ok' : 'warn',
 			dhcp ? `Server ${name}: DHCP is served on ${srv.interface}` : `Server ${name}: no DHCP on ${srv.interface}; clients need addresses`,
 			dhcp ? null : `setup:${srv.interface}`);
+
+		if (fs.access('/www/cgi-bin/luci')) {
+			let admin_ok = zone_input == 'ACCEPT' || admin_rule;
+			add(`admin:${name}`, admin_ok ? 'ok' : 'warn',
+				admin_ok ? `Server ${name}: router settings reachable from the hotspot zone`
+				         : `Server ${name}: router settings link needs an input rule (rerun wrthotspot setup ${srv.interface})`,
+				admin_ok ? null : `setup:${srv.interface}`);
+		}
 
 		// Transparent proxy on the router: its port must be open like the portal,
 		// and something must listen there.
