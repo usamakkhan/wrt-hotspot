@@ -41,11 +41,41 @@ online6b() { code_is --interface fd99::beef 'http://[fd98::2]/'; }
 redirected4() { ccurl -o /dev/null -w '%{http_code} %{redirect_url}' http://10.98.0.2/x | grep -q "^302 $P/login?dst="; }
 redirected6() { ccurl -o /dev/null -w '%{http_code} %{redirect_url}' 'http://[fd98::2]/x' | grep -q "^302 http://\[fd99::1\]:$PORT/login?dst="; }
 page_has()  { ccurl "$1" | grep -q "$2"; }
-post_has()  { ccurl -d "$1" "$P/login" | grep -q "$2"; }
+# Logins get longer: the first one after a (re)start is slow on emulated CPUs.
+post_has()  { C curl -s -m 15 -d "$1" "$P/login" | grep -q "$2"; }
 poll_wait() { sleep 3; }
 # hotspotd restarts dnsmasq when its snippet changes: wait until DNS answers.
-wait_dns() { for i in 1 2 3 4 5 6 7 8 9 10; do nslookup wg.test 127.0.0.1 >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
+wait_dns() { for i in $(seq 1 30); do nslookup wg.test 127.0.0.1 >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
 reload_hs() { /etc/init.d/wrthotspot reload; sleep 3; wait_dns; }
+# A restart takes hotspotd tens of seconds on slow CPUs: wait until the new
+# daemon has published its ubus object (a new object id), not a fixed time.
+hs_obj() { ubus -v list wrthotspot 2>/dev/null | sed -n "s/^'wrthotspot' @\([0-9a-f]*\).*/\1/p"; }
+# Stop and start rather than restart: the old daemon must be gone before the
+# new one starts (an exiting tc daemon re-applying its tree while a new nft
+# one removes the IFBs left the bridge redirecting into a deleted device).
+restart_hs() {
+	old=$(hs_obj)
+	stop_hs
+	/etc/init.d/wrthotspot start
+	for i in $(seq 1 90); do
+		new=$(hs_obj)
+		[ -n "$new" ] && [ "$new" != "$old" ] && break
+		sleep 1
+	done
+	[ -n "$new" ] && [ "$new" != "$old" ] || echo "  hotspotd not back on ubus 90s after restart"
+	sleep 2
+	wait_dns
+}
+# Stop hotspotd and wait until it has exited: it saves users, cookies and
+# history on the way out, so state files removed earlier come back.
+stop_hs() {
+	/etc/init.d/wrthotspot stop
+	for i in $(seq 1 60); do
+		ps w | grep -q '[u]code -S /usr/sbin/hotspotd' || return 0
+		sleep 1
+	done
+	echo "  hotspotd still running 60s after stop"
+}
 
 add_client() {	# name mac ip4 ip6...
 	ns=$1; mac=$2; ip4=$3; shift 3
@@ -66,13 +96,10 @@ add_client() {	# name mac ip4 ip6...
 }
 
 cleanup() {
-	for ns in hsclient hsbypass hsblocked hsinet; do
-		ip netns pids $ns 2>/dev/null | xargs -r kill 2>/dev/null
-		ip netns del $ns 2>/dev/null
-		ip link del ${ns}p 2>/dev/null
-		rm -rf /etc/netns/$ns
-	done
-	ip link del hsi0p 2>/dev/null
+	# Configs first, and netifd told while the devices still exist: deleting
+	# the veths under a bridge and interfaces netifd still manages leaves it
+	# with stale devices, and the next run's br-hstest (or hsi0p) then never
+	# comes up although the config is the same.
 	for f in /tmp/dnsmasq*.d/hstest.conf; do rm -f "$f"; done
 	if [ -d $BK ]; then
 		for c in $CONFIGS; do cp $BK/$c /etc/config/$c; done
@@ -96,13 +123,43 @@ cleanup() {
 		done
 		uci commit $c
 	done
+	if ubus list network.interface.hstest >/dev/null 2>&1 || ubus list network.interface.hsinet >/dev/null 2>&1 \
+		|| [ -e /sys/class/net/br-hstest ]; then
+		/etc/init.d/network reload
+		for i in $(seq 1 15); do
+			ubus list network.interface.hstest >/dev/null 2>&1 || ubus list network.interface.hsinet >/dev/null 2>&1 || break
+			sleep 1
+		done
+		sleep 2
+	fi
+
+	# Stand-in proxies of an aborted run (root namespace).
+	for p in $(ps w | grep '[u]httpd -f -p .*:3128' | awk '{ print $1 }'); do kill "$p" 2>/dev/null; done
+	for ns in hsclient hsbypass hsblocked hsinet; do
+		# Wait until the namespace's processes (web servers, DNS, iperf3)
+		# are gone: a survivor keeps the namespace and its veth alive.
+		for i in 1 2 3 4 5 6 7 8 9 10; do
+			pids=$(ip netns pids $ns 2>/dev/null)
+			[ -z "$pids" ] && break
+			[ "$i" -lt 5 ] && sig=TERM || sig=KILL
+			kill -$sig $pids 2>/dev/null
+			sleep 1
+		done
+		ip netns del $ns 2>/dev/null
+		ip link del ${ns}p 2>/dev/null
+		rm -rf /etc/netns/$ns
+	done
+	ip link del hsi0p 2>/dev/null
+	ip link del br-hstest 2>/dev/null
+	rm -f /tmp/hsinet-dns.pid
 }
 
 teardown() {
 	ubus call wrthotspot flush >/dev/null 2>&1
-	/etc/init.d/wrthotspot stop
+	stop_hs
 	nft delete table inet wrthotspot 2>/dev/null
-	rm -f /etc/wrthotspot/users.json /etc/wrthotspot/cookies.json /etc/wrthotspot/portal.* /tmp/wrthotspot/sessions.json
+	rm -f /etc/wrthotspot/users.json /etc/wrthotspot/cookies.json /etc/wrthotspot/history.json \
+		/etc/wrthotspot/portal.* /tmp/wrthotspot/sessions.json
 	cleanup
 	/etc/init.d/network reload
 	/etc/init.d/firewall reload >/dev/null 2>&1
@@ -114,8 +171,9 @@ setup() {
 	# Start from a clean daemon state: no sessions, users or cookies of an
 	# earlier (kept) run may leak into this one.
 	ubus call wrthotspot flush >/dev/null 2>&1
-	/etc/init.d/wrthotspot stop
-	rm -f /etc/wrthotspot/users.json /etc/wrthotspot/cookies.json /tmp/wrthotspot/sessions.json
+	stop_hs
+	rm -f /etc/wrthotspot/users.json /etc/wrthotspot/cookies.json /etc/wrthotspot/history.json \
+		/tmp/wrthotspot/sessions.json
 	cleanup
 	mkdir -p $BK
 	for c in $CONFIGS; do cp /etc/config/$c $BK/$c; done
@@ -159,16 +217,11 @@ setup() {
 	uci set network.hstest.device=br-hstest
 	uci set network.hstest.ipaddr=10.99.0.1/24
 	uci set network.hstest.ip6addr=fd99::1/64
-	uci set network.hsinet=interface
-	uci set network.hsinet.proto=static
-	uci set network.hsinet.device=hsi0p
-	uci set network.hsinet.ipaddr=10.98.0.1/24
-	uci set network.hsinet.ip6addr=fd98::1/64
 	uci commit network
 
 	z=$(uci add firewall zone)
 	uci set firewall.$z.name=hsinet
-	uci add_list firewall.$z.network=hsinet
+	uci add_list firewall.$z.device=hsi0p
 	uci set firewall.$z.input=ACCEPT	# simulated internet: let its ICMPv6 ND reach us
 	uci set firewall.$z.output=ACCEPT
 	uci set firewall.$z.forward=REJECT
@@ -227,15 +280,48 @@ setup() {
 		ip link set "$p" master br-hstest 2>/dev/null
 		ip link set "$p" up
 	done
+	# Last resort if netifd still holds stale state: a full restart rebuilds it.
+	bridge_ok() { ip -4 addr show br-hstest 2>/dev/null | grep -q 10.99.0.1; }
+	for i in $(seq 1 10); do bridge_ok && break; sleep 1; done
+	if ! bridge_ok; then
+		echo "  setup: br-hstest not configured by netifd, restarting the network"
+		/etc/init.d/network restart
+		for i in $(seq 1 30); do bridge_ok && break; sleep 1; done
+		for p in hsclientp hsbypassp hsblockedp; do
+			ip link set "$p" master br-hstest 2>/dev/null
+			ip link set "$p" up
+		done
+		bridge_ok || echo "  setup: br-hstest still not configured"
+	fi
+	# The "internet" side is addressed by hand, not by netifd: after the veth
+	# is deleted and recreated under the same name, netifd keeps reporting
+	# the interface up with its addresses while the new hsi0p stays down and
+	# unaddressed (ifup does not help), and every upstream check fails.
+	# Done after the reload, which may still drop an old run's interface.
+	ip link set hsi0p up
+	ip addr replace 10.98.0.1/24 dev hsi0p
+	ip -6 addr replace fd98::1/64 dev hsi0p nodad
 	/etc/init.d/firewall reload >/dev/null 2>&1
 	/etc/init.d/dnsmasq restart
 	/etc/init.d/wrthotspot enable
-	/etc/init.d/wrthotspot restart
-	sleep 4
-	wait_dns
-	wrthotspot user add alice password=secret profile=testprof >/dev/null
-	wrthotspot user add bob password=bobpw limit_uptime=5s profile=testprof >/dev/null
-	wrthotspot user add carol password=carolpw profile=idleprof >/dev/null
+	# hotspotd needs a while on slow CPUs before it answers on ubus; users
+	# added before that are lost and every local login fails.
+	restart_hs
+	wait_dns || echo "  setup: router DNS does not answer for wg.test"
+	add_user alice password=secret profile=testprof
+	add_user bob password=bobpw limit_uptime=5s profile=testprof
+	add_user carol password=carolpw profile=idleprof
+}
+
+# Create a local user, retrying while hotspotd starts up; a failure is a test
+# failure, not a silent omission.
+add_user() {
+	for i in 1 2 3 4 5; do
+		out=$(wrthotspot user add "$@" 2>&1) && return 0
+		sleep 2
+	done
+	bad "create user $1: $out"
+	return 1
 }
 
 if [ "$1" = cleanup ]; then
@@ -308,8 +394,7 @@ check "session accounted (bytes in > 0)" sh -c "ubus call wrthotspot sessions | 
 check "status page renders" page_has "$P/status" alice
 
 echo "== resilience"
-/etc/init.d/wrthotspot restart
-sleep 3
+restart_hs
 check "IPv4 survives daemon restart" online4
 check "IPv6 survives daemon restart" online6
 /etc/init.d/firewall reload >/dev/null 2>&1
@@ -420,8 +505,9 @@ check "carol idled out again" sh -c "ubus call wrthotspot history '{\"search\":\
 # A returning device probes connectivity (the portal sees it and the MAC
 # cookie logs it in), like phones do when they rejoin.
 C curl -s -m 3 -o /dev/null http://10.98.0.2/generate_204
-sleep 1
-check "device back: logged in by MAC cookie, no page" online4
+# Polled: the MAC-cookie login takes a few seconds on slow routers.
+online_soon() { for i in 1 2 3 4 5 6; do online4 && return 0; sleep 1; done; return 1; }
+check "device back: logged in by MAC cookie, no page" online_soon
 check "session shows mac-cookie login" sh -c "wrthotspot sessions | grep carol | grep -q mac-cookie"
 wrthotspot logout carol >/dev/null
 check_not "admin logout drops the MAC cookie" sh -c "wrthotspot cookies | grep mac | grep -q carol"
@@ -442,8 +528,8 @@ if command -v iperf3 >/dev/null && command -v tc >/dev/null; then
 	uci set wrthotspot.burstprof.keepalive_timeout=0
 	uci commit wrthotspot
 	reload_hs
-	wrthotspot user add rate1 password=x profile=rateprof >/dev/null
-	wrthotspot user add burst1 password=x profile=burstprof >/dev/null
+	add_user rate1 password=x profile=rateprof
+	add_user burst1 password=x profile=burstprof
 
 	check "tc HTB tree on the hotspot device" sh -c "tc qdisc show dev br-hstest | grep -q 'htb 1:' && tc filter show dev br-hstest ingress | grep -q hsifb"
 	post_has 'username=rate1&password=x' 'You are connected'
@@ -460,7 +546,9 @@ if command -v iperf3 >/dev/null && command -v tc >/dev/null; then
 
 	post_has 'username=burst1&password=x' 'You are connected'
 	C iperf3 -c 10.98.0.2 -R -t 12 -i 1 -J 2>/dev/null > /tmp/hstest-burst.json
-	first=$(jsonfilter -i /tmp/hstest-burst.json -e '@.intervals[0].sum.bits_per_second' | awk '{ printf "%.2f", $1 / 1000000 }')
+	# The better of the first two seconds: on slow CPUs TCP is still ramping
+	# up in the first one (the burst lasts ~1.5 s: 768k average over 8 s).
+	first=$(jsonfilter -i /tmp/hstest-burst.json -e '@.intervals[*].sum.bits_per_second' | head -2 | awk '$1 > m { m = $1 } END { printf "%.2f", m / 1000000 }')
 	late=$(jsonfilter -i /tmp/hstest-burst.json -e '@.intervals[*].sum.bits_per_second' | tail -6 | awk '{ s += $1 } END { printf "%.2f", s / NR / 1000000 }')
 	check_rate "burst: first second at burst rate" "$first" 2.5 4.6
 	check_rate "burst: back to max-limit once the average passes the threshold" "$late" 0.6 1.4
@@ -469,9 +557,7 @@ if command -v iperf3 >/dev/null && command -v tc >/dev/null; then
 
 	uci set wrthotspot.global.shaper=nft
 	uci commit wrthotspot
-	/etc/init.d/wrthotspot restart
-	sleep 4
-	wait_dns
+	restart_hs
 	check_not "nft backend: no tc tree" sh -c "tc qdisc show dev br-hstest | grep -q 'htb 1:'"
 	post_has 'username=rate1&password=x' 'You are connected'
 	check "nft backend: policers in the table" sh -c "nft list map inet wrthotspot lim_down | grep -q ld_"
@@ -480,9 +566,7 @@ if command -v iperf3 >/dev/null && command -v tc >/dev/null; then
 	check_not "nft backend: policer removed on logout" sh -c "nft list map inet wrthotspot lim_down | grep -q ld_"
 	uci set wrthotspot.global.shaper=auto
 	uci commit wrthotspot
-	/etc/init.d/wrthotspot restart
-	sleep 4
-	wait_dns
+	restart_hs
 else
 	skip "rate limit tests (need iperf3 and tc)"
 fi
@@ -506,8 +590,8 @@ uci set wrthotspot.nightprof=user_profile
 uci add_list wrthotspot.nightprof.limitation=closed_now
 uci commit wrthotspot
 reload_hs
-wrthotspot user add sched1 password=x profile=schedprof >/dev/null
-wrthotspot user add night1 password=x profile=nightprof >/dev/null
+add_user sched1 password=x profile=schedprof
+add_user night1 password=x profile=nightprof
 
 check "login refused outside the window" post_has 'username=night1&password=x' 'access is not allowed at this time'
 check "login inside the window" post_has 'username=sched1&password=x' 'You are connected'
@@ -555,7 +639,9 @@ ATTRIBUTE	Ascend-Data-Rate		197	integer
 ATTRIBUTE	Ascend-Xmit-Rate		255	integer
 END-VENDOR	Ascend
 EOF
-	soon=$(date -u -d @$(( $(date +%s) + 25 )) +%Y-%m-%dT%H:%M:%SZ)
+	# Far enough ahead to still be in the future at the radwispr login, which
+	# comes minutes later on slow routers.
+	soon=$(date -u -d @$(( $(date +%s) + 600 )) +%Y-%m-%dT%H:%M:%SZ)
 	{ cat <<EOF
 radalice Cleartext-Password := "radpw"
 	Reply-Message = "Welcome radalice",
@@ -662,12 +748,14 @@ EOF
 	check_not "Disconnect without Message-Authenticator ignored" sh -c "echo '$out' | grep -qE 'Disconnect-(ACK|NAK)'"
 
 	post_has 'username=radalice&password=radpw' 'You are connected'
-	out=$(printf 'User-Name = "radalice"\nSession-Timeout = 4\nMikrotik-Rate-Limit = "1M/1M"\nMessage-Authenticator = 0x00\n' | radclient -r2 -t6 127.0.0.1:3799 coa testing123 2>&1)
+	out=$(printf 'User-Name = "radalice"\nMikrotik-Rate-Limit = "1M/1M"\nMessage-Authenticator = 0x00\n' | radclient -r2 -t6 127.0.0.1:3799 coa testing123 2>&1)
 	check "CoA acknowledged" sh -c "echo '$out' | grep -q 'CoA-ACK'"
-	# The CoA also set Session-Timeout = 4: check before the session ends,
-	# polling rather than sleeping (slow routers take longer to apply it).
-	check "CoA changed the rate limit" sh -c "[ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radalice'].rate_limit\")\" = 1M/1M ]"
-	command -v tc >/dev/null && check "CoA rate applied to the tc class" sh -c "for i in 1 2 3; do tc class show dev br-hstest | grep -q 'ceil 1Mbit' && exit 0; sleep 1; done; exit 1"
+	# Polling rather than sleeping: slow routers take longer to apply it.
+	check "CoA changed the rate limit" sh -c "for i in 1 2 3 4 5; do [ \"\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radalice'].rate_limit\")\" = 1M/1M ] && exit 0; sleep 1; done; exit 1"
+	command -v tc >/dev/null && check "CoA rate applied to the tc class" sh -c "for i in 1 2 3 4 5; do tc class show dev br-hstest | grep -q 'ceil 1Mbit' && exit 0; sleep 1; done; exit 1"
+	# Session-Timeout in a second CoA: in the first one it could end the
+	# session on a slow router before the rate checks above ran.
+	printf 'User-Name = "radalice"\nSession-Timeout = 4\nMessage-Authenticator = 0x00\n' | radclient -r2 -t6 127.0.0.1:3799 coa testing123 >/dev/null 2>&1
 	sleep 4
 	poll_wait
 	check_not "CoA Session-Timeout ended the session" online4
@@ -700,7 +788,7 @@ EOF
 	wrthotspot logout radgroup >/dev/null
 
 	post_has 'username=radwispr&password=x' 'You are connected'
-	check "WISPr-Session-Terminate-Time applied" sh -c "t=\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radwispr'].limits.max_uptime\"); [ \$t -gt 0 ] && [ \$t -le 26 ]"
+	check "WISPr-Session-Terminate-Time applied" sh -c "t=\$(ubus call wrthotspot sessions | jsonfilter -e \"@.sessions[@.user='radwispr'].limits.max_uptime\"); [ \$t -gt 0 ] && [ \$t -le 600 ]"
 	wrthotspot logout radwispr >/dev/null
 
 	# Third-party servers: CoovaChilli and Ascend attributes, presets.
@@ -758,8 +846,10 @@ if ls /lib/libustream-ssl.so* >/dev/null 2>&1; then
 	reload_hs
 	H="https://login.wifi:$HTTPS_PORT"
 	check "uhttpd listens for HTTPS" sh -c "netstat -ltn | grep -q ':$HTTPS_PORT '"
-	check "portal name resolves to router (A)" sh -c "ip netns exec hsclient nslookup login.wifi | grep -q 10.99.0.1"
-	check "portal name resolves to router (AAAA)" sh -c "ip netns exec hsclient nslookup -type=aaaa login.wifi | grep -q fd99::1"
+	# hotspotd restarts dnsmasq for the new name after the reload: poll.
+	resolves() { for i in $(seq 1 15); do C nslookup "$@" 2>/dev/null | grep -q "$addr" && return 0; sleep 1; done; return 1; }
+	addr=10.99.0.1; check "portal name resolves to router (A)" resolves login.wifi
+	addr=fd99::1; check "portal name resolves to router (AAAA)" resolves -type=aaaa login.wifi
 	check "redirect now goes to HTTPS login" sh -c "ip netns exec hsclient curl -s -m5 -o /dev/null -w '%{redirect_url}' http://10.98.0.2/ | grep -q '^$H/login'"
 	check "HTTP login page redirects to HTTPS" sh -c "ip netns exec hsclient curl -s -m5 -o /dev/null -w '%{redirect_url}' http://login.wifi:$PORT/login | grep -q '^$H/login'"
 	check "HTTPS login page served" sh -c "ip netns exec hsclient curl -k -s -m5 $H/login | grep -q 'Sign in'"
