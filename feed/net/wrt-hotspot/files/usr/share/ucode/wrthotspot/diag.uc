@@ -28,6 +28,7 @@ export function run_checks(cfg, state) {
 	c.load('firewall');
 	c.load('network');
 	c.load('dhcp');
+	c.load('uhttpd');
 
 	add('daemon', state?.running ? 'ok' : 'error', state?.running ? 'hotspotd is running' : 'hotspotd is not running');
 
@@ -94,6 +95,16 @@ export function run_checks(cfg, state) {
 				admin_ok ? `Server ${name}: router settings reachable from the hotspot zone`
 				         : `Server ${name}: router settings link needs an input rule (rerun wrthotspot setup ${srv.interface})`,
 				admin_ok ? null : `setup:${srv.interface}`);
+			if (fs.access('/www/cgi-bin/wrthotspot/cgi-bin/luci')) {
+				let aliases = c.get('uhttpd', 'main', 'alias') ?? [];
+				if (type(aliases) != 'array')
+					aliases = [ aliases ];
+				let routed = '/cgi-bin/luci=/cgi-bin/wrthotspot' in aliases;
+				add(`luci-route:${name}`, routed ? 'ok' : 'warn',
+					routed ? `Server ${name}: direct LuCI URL routes hotspot clients to the portal`
+					       : `Server ${name}: direct LuCI URL needs its uhttpd alias (rerun wrthotspot setup ${srv.interface})`,
+					routed ? null : `setup:${srv.interface}`);
+			}
 		}
 
 		// Transparent proxy on the router: its port must be open like the portal,

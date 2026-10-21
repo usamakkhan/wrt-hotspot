@@ -1,0 +1,22 @@
+#!/bin/sh
+# uhttpd's alias prepends /cgi-bin/wrthotspot to /cgi-bin/luci.
+# Only clients known on a hotspot network are redirected. Other devices keep
+# the normal LuCI entry point, including its path-info routes.
+ip=${REMOTE_ADDR#::ffff:}
+client=$(ubus -S call wrthotspot client "{\"ip\":\"$ip\"}" 2>/dev/null) || client=
+if [ -n "$client" ] && [ "$(printf '%s' "$client" | jsonfilter -e '@.found')" = true ] &&
+   [ -n "$(printf '%s' "$client" | jsonfilter -e '@.server')" ]; then
+	port=$(uci -q get wrthotspot.global.portal_port)
+	case $port in ''|*[!0-9]*) port=8002 ;; esac
+	server=${SERVER_ADDR#::ffff:}
+	case $server in *:*) host="[$server]" ;; *) host=$server ;; esac
+	if [ -n "$(printf '%s' "$client" | jsonfilter -e '@.session.id')" ]; then
+		page=status
+	else
+		page=login
+	fi
+	printf 'Status: 302 Found\r\nLocation: http://%s:%s/%s\r\nCache-Control: no-store\r\n\r\n' "$host" "$port" "$page"
+	exit 0
+fi
+export SCRIPT_NAME=/cgi-bin/luci
+exec /www/cgi-bin/luci "$@"

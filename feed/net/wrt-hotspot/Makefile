@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=wrt-hotspot
-PKG_VERSION:=0.10.0
+PKG_VERSION:=0.10.1
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_MAINTAINER:=Usama Khan
@@ -17,7 +17,7 @@ define Package/wrt-hotspot
   URL:=https://github.com/usamakkhan/wrt-hotspot
   DEPENDS:=+ucode +ucode-mod-fs +ucode-mod-uci +ucode-mod-ubus +ucode-mod-uloop \
 	+ucode-mod-rtnl +ucode-mod-digest \
-	+uhttpd +uhttpd-mod-ucode \
+	+uhttpd +uhttpd-mod-ucode +jsonfilter \
 	+nftables-json +kmod-nft-nat +kmod-nft-fib +firewall4
 endef
 
@@ -95,6 +95,8 @@ define Package/wrt-hotspot/install
 	$(INSTALL_DATA) ./files/etc/sysctl.d/12-wrthotspot.conf $(1)/etc/sysctl.d/
 	$(INSTALL_BIN) ./files/usr/sbin/hotspotd $(1)/usr/sbin/hotspotd
 	$(INSTALL_BIN) ./files/usr/sbin/wrthotspot $(1)/usr/sbin/wrthotspot
+	$(INSTALL_DIR) $(1)/www/cgi-bin/wrthotspot/cgi-bin
+	$(INSTALL_BIN) ./files/www/cgi-bin/wrthotspot/cgi-bin/luci $(1)/www/cgi-bin/wrthotspot/cgi-bin/luci
 	$(INSTALL_DIR) $(1)/usr/share/ucode/wrthotspot
 	$(INSTALL_DATA) $(filter-out %/radius.uc %/rosapi.uc,$(wildcard ./files/usr/share/ucode/wrthotspot/*.uc)) \
 		$(1)/usr/share/ucode/wrthotspot/

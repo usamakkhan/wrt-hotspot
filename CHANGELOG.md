@@ -2,6 +2,10 @@
 
 This file records released changes. For installation, see the [README](README.md); for test environments and measurements, see [qualification](docs/qualification.md).
 
+## 0.10.1 - 2026-10-21
+
+- Direct `/cgi-bin/luci` visits from hotspot clients now go to the hotspot login or status page. The `/admin/` shortcut continues to open router settings, and devices outside the hotspot keep the standard LuCI URL.
+
 ## 0.10.0 - 2026-10-21
 
 ### Added

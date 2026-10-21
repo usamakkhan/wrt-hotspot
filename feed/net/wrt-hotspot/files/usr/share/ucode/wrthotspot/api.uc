@@ -125,7 +125,7 @@ export function publish(conn, core) {
 
 				uloop.process('/bin/sh', [ '-c',
 					'/etc/init.d/network reload; /etc/init.d/firewall reload; /etc/init.d/dnsmasq restart; ' +
-					'/etc/init.d/odhcpd restart; /etc/init.d/wrthotspot reload' ], {}, () => {});
+					'/etc/init.d/odhcpd restart; /etc/init.d/uhttpd restart; /etc/init.d/wrthotspot reload' ], {}, () => {});
 
 				return { ok: true, output: trim(r.out) };
 			},

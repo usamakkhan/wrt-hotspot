@@ -273,7 +273,25 @@ function setup(net) {
 	c.commit('firewall');
 	c.commit('wrthotspot');
 
-	print('Done. Apply with:\n  service network reload && service firewall reload && service dnsmasq restart && service odhcpd restart && service wrthotspot restart\n');
+	// Intercept LuCI's usual URL for hotspot clients. uhttpd aliases prepend
+	// the target path; the gateway then either redirects or runs LuCI normally.
+	// /admin/ uses a separate CGI entry and is unaffected by this alias.
+	if (fs.access('/www/cgi-bin/luci') && fs.access('/www/cgi-bin/wrthotspot/cgi-bin/luci')) {
+		c.load('uhttpd');
+		if (c.get('uhttpd', 'main') == 'uhttpd') {
+			let alias = '/cgi-bin/luci=/cgi-bin/wrthotspot';
+			let existing = c.get('uhttpd', 'main', 'alias') ?? [];
+			let aliases = (type(existing) == 'array') ? existing : [ existing ];
+			if (!(alias in aliases)) {
+				c.set('uhttpd', 'main', 'alias', [ alias, ...aliases ]);
+				c.save('uhttpd');
+				c.commit('uhttpd');
+				print('Added LuCI hotspot redirect to uhttpd\n');
+			}
+		}
+	}
+
+	print('Done. Apply with:\n  service network reload && service firewall reload && service dnsmasq restart && service odhcpd restart && service uhttpd restart && service wrthotspot restart\n');
 }
 
 // Self-signed certificate for HTTPS login; browsers will warn, so use a real

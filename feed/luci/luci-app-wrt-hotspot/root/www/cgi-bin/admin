@@ -1,0 +1,4 @@
+#!/bin/sh
+# Serve LuCI under a separate script name so hotspot clients can reach it
+# through /admin/ while direct /cgi-bin/luci visits go to the portal.
+exec /www/cgi-bin/luci "$@"

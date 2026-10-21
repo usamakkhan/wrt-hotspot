@@ -1,6 +1,6 @@
 # Architecture
 
-WrtHotspot is a captive portal for OpenWrt 24.10 and 25.12. This page describes version 0.10.0. For installation, see the [README](../README.md); for measured behavior, see [qualification](qualification.md).
+WrtHotspot is a captive portal for OpenWrt 24.10 and 25.12. This page describes version 0.10.1. For installation, see the [README](../README.md); for measured behavior, see [qualification](qualification.md).
 
 ## Packages
 

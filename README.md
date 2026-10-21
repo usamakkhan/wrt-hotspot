@@ -2,7 +2,7 @@
 
 WrtHotspot is a dual-stack captive portal for OpenWrt 24.10 and 25.12. It provides local users and vouchers, a LuCI configuration app, an optional staff panel, optional RADIUS integration and per-user traffic shaping. It is inspired by MikroTik Hotspot and supports compatible page templates and selected billing interfaces.
 
-**Current version:** 0.10.0. CI builds and tests packages on OpenWrt x86; version 0.9.0 also passed tests on emulated MIPS and ARM routers. Physical routers and real Wi-Fi captive-portal assistants still need end-to-end testing. See [qualification](docs/qualification.md) for exact environments and results.
+**Current version:** 0.10.1. CI builds and tests packages on OpenWrt x86; version 0.9.0 also passed tests on emulated MIPS and ARM routers. Physical routers and real Wi-Fi captive-portal assistants still need end-to-end testing. See [qualification](docs/qualification.md) for exact environments and results.
 
 - [Releases](https://github.com/usamakkhan/wrt-hotspot/releases) and [issues](https://github.com/usamakkhan/wrt-hotspot/issues)
 - [Architecture](docs/architecture.md)
@@ -67,7 +67,7 @@ wrthotspot status
 
 `setup` requires an existing interface in `/etc/config/network`. It adds a hotspot server and firewall access. For a static network with no DHCP section, it also adds DHCPv4, RA and DHCPv6 service. It disables flow offloading, which would bypass hotspot accounting and limits. Connect a client to the network and open an HTTP page to reach the login portal. Replace the example credentials before use.
 
-The built-in portal pages show **Router settings** when LuCI is installed. It opens `http://<router-ip>/admin/`, which forwards to LuCI's login page. Run `wrthotspot setup <network>` again after upgrading an existing hotspot so its firewall zone allows access to the router web server on ports 80 and 443. Anyone on that hotspot network can then reach the LuCI login page, but must still authenticate with router credentials. The portal also redirects its own `/admin` path to this shortcut.
+The built-in portal pages show **Router settings** when LuCI is installed. It opens `http://<router-ip>/admin/`, which forwards to LuCI's login page. After upgrading an existing hotspot, run `wrthotspot setup <network>` and then the reload command it prints. This opens the router web ports from the hotspot zone and routes direct `/cgi-bin/luci` visits from hotspot clients to the hotspot login or status page. Devices on other networks keep the usual LuCI URL. Anyone on the hotspot network can still reach the LuCI login page through `/admin/` and must authenticate with router credentials. The portal also redirects its own `/admin` path to this shortcut.
 
 Configure the service in **Services > Hotspot** in LuCI. If `wrt-hotspot-panel` is installed, the staff panel is at `http://<router>/hotspot/`. Create a panel account with `wrthotspot operator add <user> operator` or use `admin` for panel administration. The CLI prompts for its password.
 

@@ -9,7 +9,7 @@
 # Needs ip-full, kmod-veth, curl (and dnsmasq-full + libustream-* for the
 # nftset / HTTPS parts; freeradius3 with -mod-files, -mod-pap, -mod-chap,
 # -mod-detail and freeradius3-utils for the RADIUS part; on 24.10 radiusd also
-# needs libopenssl-legacy). The router's network/firewall/dhcp/wrthotspot configs
+# needs libopenssl-legacy). The router's network/firewall/dhcp/uhttpd/wrthotspot configs
 # are backed up first and restored afterwards.
 #
 # Usage: netns-test.sh [keep|cleanup]
@@ -21,7 +21,7 @@ PASS=0
 FAIL=0
 SKIP=0
 BK=/tmp/hstest-backup
-CONFIGS="network firewall dhcp wrthotspot"
+CONFIGS="network firewall dhcp uhttpd wrthotspot"
 
 C() { ip netns exec hsclient "$@"; }
 I() { ip netns exec hsinet "$@"; }
@@ -103,6 +103,7 @@ cleanup() {
 	for f in /tmp/dnsmasq*.d/hstest.conf; do rm -f "$f"; done
 	if [ -d $BK ]; then
 		for c in $CONFIGS; do cp $BK/$c /etc/config/$c; done
+		/etc/init.d/uhttpd restart
 		[ -f $BK/fr-dictionary ] && cp $BK/fr-dictionary /etc/freeradius3/dictionary
 		[ -f $BK/fr-authorize ] && cp $BK/fr-authorize /etc/freeradius3/mods-config/files/authorize
 		if [ -d $BK/fr-sites ]; then
@@ -230,6 +231,7 @@ setup() {
 	uci commit firewall
 
 	wrthotspot setup hstest >/dev/null
+	[ -e /www/cgi-bin/wrthotspot/cgi-bin/luci ] && /etc/init.d/uhttpd restart
 	f=$(uci add firewall forwarding)
 	uci set firewall.$f.src=hstest
 	uci set firewall.$f.dest=hsinet
@@ -339,10 +341,24 @@ check "client reaches the portal" page_has "$P/login" "Sign in"
 if [ -e /www/cgi-bin/luci ]; then
 	router_admin_link() { C curl -fsS -m 5 http://10.99.0.1:8002/login | grep -q 'http://10.99.0.1/admin/'; }
 	router_admin_redirect() { C curl -s -m 5 -o /dev/null -w '%{redirect_url}' http://10.99.0.1:8002/admin | grep -qx 'http://10.99.0.1/admin/'; }
-	router_admin_page() { C curl -fsS -m 5 http://10.99.0.1/admin/ | grep -q '/cgi-bin/luci/'; }
+	router_admin_page() { C curl -fsS -m 5 http://10.99.0.1/admin/ | grep -q '/cgi-bin/admin/'; }
 	check "portal links to router settings" router_admin_link
 	check "portal admin path redirects to router settings" router_admin_redirect
 	check "hotspot client can reach router settings shortcut" router_admin_page
+	if [ -e /www/cgi-bin/wrthotspot/cgi-bin/luci ]; then
+		router_luci_login() { C curl -s -m 5 -o /dev/null -w '%{redirect_url}' http://10.99.0.1/cgi-bin/luci/ | grep -qx "$P/login"; }
+		router_admin_cgi() {
+			code=$(C curl -s -m 5 -o /dev/null -w '%{http_code}' http://10.99.0.1/cgi-bin/admin/)
+			[ "$code" = 200 ] || [ "$code" = 302 ]
+		}
+		router_luci_lan() {
+			code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1/cgi-bin/luci/)
+			[ "$code" = 200 ] || [ "$code" = 302 ]
+		}
+		check "direct LuCI URL sends hotspot client to login" router_luci_login
+		check "admin CGI remains available to hotspot client" router_admin_cgi
+		check "direct LuCI URL remains available outside hotspot" router_luci_lan
+	fi
 fi
 
 echo "== unauthenticated"
@@ -402,6 +418,10 @@ ccurl -o /dev/null http://10.98.0.2/index.html
 poll_wait
 check "session accounted (bytes in > 0)" sh -c "ubus call wrthotspot sessions | jsonfilter -e '@.sessions[0].bytes_in' | grep -qv '^0$'"
 check "status page renders" page_has "$P/status" alice
+if [ -e /www/cgi-bin/wrthotspot/cgi-bin/luci ]; then
+	router_luci_status() { C curl -s -m 5 -o /dev/null -w '%{redirect_url}' http://10.99.0.1/cgi-bin/luci/ | grep -qx "$P/status"; }
+	check "direct LuCI URL sends logged-in hotspot client to status" router_luci_status
+fi
 
 echo "== resilience"
 restart_hs
