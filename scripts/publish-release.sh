@@ -89,13 +89,19 @@ done
 rm -f "$TMP"
 
 # --- 4. check what routers will download ---------------------------------------------
+# Byte for byte the signed indexes in dist/ (packages.adb is compressed, so
+# its content cannot be grepped for the version).
 fail=0
+local_file() { for f in $FILES; do case "$f" in */"$1") echo "$f" ;; esac; done; }
+sum() { sha256sum | cut -d' ' -f1; }
+WANT_OPKG=$(sum < "$(local_file Packages)")
+WANT_APK=$(sum < "$(local_file packages.adb)")
 check() {	# check <base url>
-	if curl -fsSL "$1/Packages" | grep -q "^Version: ${V}-r" &&
-	   curl -fsSL "$1/packages.adb" | grep -aq "${V}-r"; then
+	if [ "$(curl -fsSL "$1/Packages" | sum)" = "$WANT_OPKG" ] &&
+	   [ "$(curl -fsSL "$1/packages.adb" | sum)" = "$WANT_APK" ]; then
 		echo "   ok   $1"
 	else
-		echo "   FAIL $1 does not serve $V" >&2; fail=1
+		echo "   FAIL $1 does not serve the $V indexes" >&2; fail=1
 	fi
 }
 echo "== feed URLs"
