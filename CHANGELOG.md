@@ -9,7 +9,7 @@
 - MikroTik page sets now really work unmodified:
   - quoted comparisons (`$(if trial == 'yes')`, `$(if error == "")`) were compared with the quotes and never matched;
   - the stock trial link (`username=T-$(mac-esc)`) starts a trial.
-- The portal serves `.webp` and `.woff` files. CSS, images and scripts are revalidated (ETag) instead of cached for an hour, so a replaced page set shows at once.
+- The portal serves `.webp` and `.woff` files. CSS, images and scripts are cached for 2 minutes and then revalidated (ETag) instead of cached for an hour, so a replaced page set shows within 2 minutes.
 
 ### Fixes (found on emulated MIPS and ARM routers)
 
@@ -23,6 +23,7 @@
 - Free memory is sampled every minute and the best of the last 10 samples counts: the limits stay steady through reloads and package installs.
 - `portal_max_requests` defaults to 8 workers up to 64 MB of RAM, 16 up to 128 MB, 32 above (was 32 everywhere, up to 13 MB in a burst of new clients).
 - LuCI, `wrthotspot status` and diagnostics say when the minimum applies, when the conntrack table limits, and when flash is short.
+- **Faster portal on slow CPUs.** On a MIPS 24Kc the login page takes 122 ms instead of 169 ms and a CSS or image file 82 ms instead of 115 ms; rendering the pages is almost 4× faster. Regular expressions are slow in ucode on such CPUs, so the template engine and the per-request helpers now use string functions only, and the portal gets its settings from hotspotd instead of parsing the whole configuration on every request. Pages render exactly as before.
 
 ### Tests
 

@@ -153,6 +153,29 @@ scales with RAM; requests beyond it wait in uhttpd's queue instead of costing me
 Logging: every login/logout is logged at `info`. With hundreds of logins a minute the default 64 KiB
 logread ring wraps quickly — use remote syslog or raise `log_size` on busy sites.
 
+### Speed on a slow CPU (2026-10-21)
+
+Measured on the emulated MIPS 24Kc (`tests/emu`), old code against new on the same router, server
+time as curl reports it (time to first byte, without curl's own ~100 ms start):
+
+| | before | after |
+|---|---|---|
+| portal login page (`/login`) | 169 ms | 122 ms |
+| portal static file (CSS, image, script) | 115 ms | 82 ms, and cached 2 min by the browser |
+| rendering all 12 built-in pages | 393 ms | 103 ms |
+| floor: uhttpd fork, empty handler | 34 ms | 34 ms |
+
+Where the time went: a regex `match()` costs up to ~0.5 ms in ucode on this CPU, and the template
+engine ran several per tag and per variable; the portal also parsed the whole UCI config on every
+request although hotspotd already holds it. Now templates and the per-request helpers
+(`normalize_mac`, `normalize_ip`, page paths) use string functions only, and hotspotd hands the
+portal its settings in the `client` reply it already sent.
+
+Logins (~150–350 ms) and logouts (~400–500 ms) on this CPU are bound by the `nft` and `tc`
+processes each one starts (45–60 ms per process here); they did not change, and the emulator's
+timing swings by ±50% between runs. `nft -f` batches cannot read named counters (`list counter`
+fails inside a batch), so the final counter read of a logout stays a separate call.
+
 ## Emulated routers (QEMU)
 
 Status 2026-10-20. OpenWrt's own QEMU targets run the real release images of other CPUs:

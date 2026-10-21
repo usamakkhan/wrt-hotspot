@@ -73,6 +73,20 @@ export function publish(conn, core) {
 		return sid ? !!conn.call('session', 'access', { ubus_rpc_session: sid, scope: 'ubus', object: 'wrthotspot', function: 'operator_set' })?.access : true;
 	}
 
+	// What portal.uc needs of the configuration, so that it does not parse
+	// UCI on every request: the globals it uses and the client's server profile.
+	function portal_settings(server) {
+		let cfg = core.config();
+		let g = cfg.global;
+		let sp = cfg.server_profiles[cfg.servers[server]?.profile] ?? cfg.server_profiles.default;
+
+		return {
+			portal_port: g.portal_port, https_port: g.https_port, nas_identifier: g.nas_identifier,
+			ssl_certificate: g.ssl_certificate, ssl_key: g.ssl_key,
+			profile: { dns_name: sp?.dns_name, html_directory: sp?.html_directory, login_by: sp?.login_by ?? [] },
+		};
+	}
+
 	let methods = {
 		status: {
 			call: function() {
@@ -124,9 +138,9 @@ export function publish(conn, core) {
 				let c = core.client(req.args.ip, req.args.mac);
 
 				if (!c)
-					return { found: false };
+					return { found: false, portal: portal_settings(null) };
 
-				return { found: true, ...c, ...core.chap_for(c.mac) };
+				return { found: true, ...c, ...core.chap_for(c.mac), portal: portal_settings(c.server) };
 			},
 		},
 

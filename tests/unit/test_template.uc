@@ -18,6 +18,12 @@ eq(render('$(if trial != yes)no-trial$(endif)', v), 'no-trial', '!=');
 eq(render('$(if logged-in)$(if trial == yes)a$(else)b$(endif)$(endif)', v), 'b', 'nested');
 eq(render('$(document).ready()', v), '$(document).ready()', 'jQuery untouched');
 eq(render('price $(', v), 'price $(', 'unterminated');
+eq(render('a $(x $(username) b', v), 'a $(x $(username) b', 'a tag runs to the first ")" even past another "$("');
+eq(render('$(username)$(username)-$(error)x', v), 'bobbob-x', 'adjacent tags and text after the last one');
+eq(render('$(q)', { q: `a&&b<<c>>"d"'e'` }), 'a&amp;&amp;b&lt;&lt;c&gt;&gt;&quot;d&quot;&#39;e&#39;', 'every special character escaped, repeated ones too');
+eq(render('$(-raw)$(x-raw)', { x: '<b>' }), '$(-raw)<b>', '"-raw" alone is a missing name, x-raw is x unescaped');
+eq(render('$(if)$(if  username ==bob )Y$(endif)', { if: 'I', username: 'bob' }), 'IY', '"if" alone is a name; extra spaces in a test');
+eq(render('$(if username == "bob)N$(else)Y$(endif)', v), 'Y', 'an unbalanced quote is part of the value');
 // MikroTik's stock pages quote the compared value.
 eq(render("$(if trial == 'no')N$(else)Y$(endif)", v), 'N', 'single-quoted value');
 eq(render('$(if error == "")none$(else)err$(endif)', v), 'none', 'double-quoted empty value');

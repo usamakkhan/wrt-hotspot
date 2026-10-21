@@ -94,16 +94,31 @@ export function fmt_bytes(n) {
 	return `${int(n)} B`;
 };
 
+// (String functions instead of regexes here: these run for every portal
+// request, ubus call and neighbor event, and a regex match costs ~0.5 ms on
+// a MIPS router.)
+const HEX = '0123456789abcdef';
+
 export function normalize_mac(mac) {
 	if (type(mac) != 'string')
 		return null;
 
-	mac = lc(replace(trim(mac), /-/g, ':'));
+	mac = lc(replace(trim(mac), '-', ':'));
 
-	if (match(mac, /^[0-9a-f]{12}$/))
-		mac = join(':', map(match(mac, /../g), (m) => m[0]));
+	if (length(mac) == 12 && ltrim(mac, HEX) == '')
+		mac = join(':', [ substr(mac, 0, 2), substr(mac, 2, 2), substr(mac, 4, 2),
+			substr(mac, 6, 2), substr(mac, 8, 2), substr(mac, 10, 2) ]);
 
-	return match(mac, /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/) ? mac : null;
+	let parts = split(mac, ':');
+
+	if (length(mac) != 17 || length(parts) != 6 || ltrim(join('', parts), HEX) != '')
+		return null;
+
+	for (let p in parts)
+		if (length(p) != 2)
+			return null;
+
+	return mac;
 };
 
 // uhttpd listens dual-stack, so IPv4 clients may show up as ::ffff:a.b.c.d.
@@ -113,9 +128,14 @@ export function normalize_ip(ip) {
 
 	ip = lc(trim(ip));
 
-	let m = match(ip, /^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-	if (m)
-		return m[1];
+	if (substr(ip, 0, 7) == '::ffff:') {
+		let v4 = substr(ip, 7);
+		let parts = split(v4, '.');
+
+		if (length(parts) == 4 && ltrim(v4, '0123456789.') == '' &&
+		    length(parts[0]) && length(parts[1]) && length(parts[2]) && length(parts[3]))
+			return v4;
+	}
 
 	let i = index(ip, '%');
 	return (i >= 0) ? substr(ip, 0, i) : ip;

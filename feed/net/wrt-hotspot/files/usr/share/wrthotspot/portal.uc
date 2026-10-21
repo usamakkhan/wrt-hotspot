@@ -164,8 +164,13 @@ function cross_site(env, ctx) {
 	return !(h && (h == host_without_port(ctx.host) || h == ctx.server_addr || h == lc(ctx.sp.dns_name ?? '')));
 }
 
+const PATH_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-/';
+
+// Letters, digits, "_", "." and "-" in "/"-separated non-empty parts, no "..".
+// (String checks, not a regex: this runs for every request.)
 function page_path(sp, name) {
-	if (!match(name, /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/) || index(name, '..') >= 0)
+	if (type(name) != 'string' || name == '' || ltrim(name, PATH_CHARS) != '' || index(name, '..') >= 0 ||
+	    index(name, '//') >= 0 || substr(name, 0, 1) == '/' || substr(name, -1) == '/')
 		return null;
 
 	for (let dir in [ sp.html_directory, BUILTIN_PAGES ]) {
@@ -190,19 +195,22 @@ function render_page(sp, name, vars, headers) {
 	send_response('200 OK', { ...(headers ?? {}), 'Content-Type': 'text/html; charset=utf-8' }, tpl.render(fs.readfile(p), vars));
 }
 
-// Revalidated, not cached for a fixed time: an admin may replace the page set
-// (same file names, new content) at any moment. The ETag (inode, mtime, size)
-// changes with every replacement, even one within the same second.
+// Cached for 2 minutes, then revalidated: a page view with its CSS and
+// images costs one request instead of six on a slow router, and a replaced
+// page set (same file names, new content) still shows within 2 minutes. The
+// ETag (inode, mtime, size) changes with every replacement, even one within
+// the same second.
 function serve_static(env, sp, path) {
 	let p = page_path(sp, path);
 
-	if (!p || match(path, /\.html$/))
+	if (!p || substr(path, -5) == '.html')
 		return false;
 
-	let ext = lc(match(path, /\.([A-Za-z0-9]+)$/)?.[1] ?? '');
+	let dot = split(path, '.');
+	let ext = (length(dot) > 1 && index(dot[-1], '/') < 0) ? lc(dot[-1]) : '';
 	let st = fs.stat(p);
 	let etag = sprintf('"%x-%x-%x"', st?.inode ?? 0, st?.mtime ?? 0, st?.size ?? 0);
-	let headers = { 'Content-Type': MIME[ext] ?? 'application/octet-stream', 'Cache-Control': 'no-cache', ETag: etag };
+	let headers = { 'Content-Type': MIME[ext] ?? 'application/octet-stream', 'Cache-Control': 'max-age=120', ETag: etag };
 
 	// (uhttpd maps only some headers to HTTP_*; the rest are in env.headers)
 	if (env.headers?.['if-none-match'] == etag)
@@ -307,16 +315,22 @@ global.handle_request = function(env) {
 		return;
 	}
 
-	let cfg = load_config();
-	let g = cfg.global;
 	let ip = normalize_ip(env.REMOTE_ADDR);
 	let client = conn.call('wrthotspot', 'client', { ip });
 
+	// hotspotd sends the settings the portal needs along with the client:
+	// parsing the whole UCI config here cost most of a request on a slow
+	// router. Without the daemon, read the config ourselves.
+	let g = client?.portal, sp = g?.profile;
+
+	if (!sp) {
+		let cfg = load_config();
+		g = cfg.global;
+		sp = cfg.server_profiles[cfg.servers[client?.server]?.profile] ?? cfg.server_profiles.default;
+	}
+
 	if (client && !client.found)
 		client = null;
-
-	let srv = cfg.servers[client?.server];
-	let sp = cfg.server_profiles[srv?.profile] ?? cfg.server_profiles.default;
 	let uri = env.REQUEST_URI ?? '/';
 	let qpos = index(uri, '?');
 	let path = (qpos >= 0) ? substr(uri, 0, qpos) : uri;
@@ -331,7 +345,7 @@ global.handle_request = function(env) {
 	let base = origin(is_https ? 'https' : 'http', host, int(env.SERVER_PORT ?? g.portal_port));
 
 	let ctx = {
-		env, cfg, sp, ip, form, host, base, client, https_login,
+		env, sp, ip, form, host, base, client, https_login,
 		login_base: https_login ? origin('https', host, g.https_port) : base,
 		identity: g.nas_identifier || 'WrtHotspot',
 		server_addr: normalize_ip(env.SERVER_ADDR),
