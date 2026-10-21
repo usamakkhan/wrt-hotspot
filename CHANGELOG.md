@@ -2,6 +2,19 @@
 
 This file records released changes. For installation, see the [README](README.md); for test environments and measurements, see [qualification](docs/qualification.md).
 
+## 0.10.0 - 2026-10-21
+
+### Added
+
+- LuCI Quick Setup wizard for the hotspot network, portal login options and default user limits. Each step provides Save and Apply controls.
+- **Router settings** links on all built-in default and classic portal pages. The link opens `http://<router-ip>/admin/`, which forwards to LuCI when installed. The portal's own `/admin` path also redirects there.
+- Setup opens the router web ports from the hotspot zone when LuCI is installed. On an existing hotspot, run `wrthotspot setup <network>` after upgrading to add the firewall rule. All hotspot devices can reach the LuCI login page; router authentication remains required.
+- Production security and upgrade guides, plus documentation checks in CI.
+
+### Verified
+
+CI passed on OpenWrt 24.10.8 and 25.12.6 for the feature commit. The new admin path and wizard have not yet been tested on a physical router.
+
 ## 0.9.0 - 2026-10-21
 
 **Upgrade guidance:** OpenWrt 24.10 users of RADIUS, CoA or the RouterOS API should upgrade. Earlier socket binding did not work with that release's ucode socket module. The release feed is also copied to older versioned feed URLs so routers already using those URLs can upgrade.
