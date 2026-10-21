@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 — 2026-10-21
+
+Custom login pages, small and slow routers, and an important fix for OpenWrt 24.10: RADIUS, CoA and the RouterOS API did not work there at all. Upgrading is recommended for everyone, and urgent for 24.10 routers that use RADIUS.
+
+Feeds: every feed URL serves 0.9.0, including the versioned v0.8.0 and v0.8.1 ones, so `apk upgrade` / `opkg upgrade` is all a router needs.
 
 ### Custom login pages
 
@@ -33,6 +37,11 @@
 - The netns test brings its own minimal FreeRADIUS site, so it needs only the files, pap, chap and detail modules.
 - Fewer fixed sleeps in the tests: the regression test waits for the daemon after a restart, and the CoA check polls.
 - Package builds copy the feed (`src-cpy`), so package metadata no longer shows the build machine's path.
+
+### Releases
+
+- `scripts/publish-release.sh` publishes a release and copies its feed into every older release, then downloads the indexes from each feed URL to confirm they serve the new version: no router is left on an old feed.
+- The build never creates new signing keys silently: a missing key is an error unless `WRTHOTSPOT_NEW_KEYS=1` (CI uses throwaway keys that way).
 
 ## 0.8.1 — 2026-10-20
 

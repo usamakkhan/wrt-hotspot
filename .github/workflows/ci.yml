@@ -68,6 +68,10 @@ jobs:
           path: build
           key: sdk-${{ matrix.release }}-v1
       - name: build
+        # Throwaway signing keys: CI artifacts are for testing, the release
+        # feeds are signed on the machine that holds the project keys.
+        env:
+          WRTHOTSPOT_NEW_KEYS: "1"
         run: scripts/build-packages.sh ${{ matrix.release }}
       - uses: actions/upload-artifact@v7
         with:

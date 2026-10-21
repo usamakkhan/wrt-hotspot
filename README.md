@@ -3,7 +3,7 @@
 A captive portal hotspot for OpenWrt 24.10+, inspired by MikroTik Hotspot, with full IPv6 support, RADIUS (incl. CoA),
 vouchers, per-user shaping, a LuCI app and a standalone operator panel.
 
-Status: **0.8.1 — Phases 1–8 working, qualified on x86**: tested end to end on OpenWrt 25.12.5 x86-64
+Status: **0.9.0 — Phases 1–8 working, qualified on x86**: tested end to end on OpenWrt 25.12.5 x86-64
 against FreeRADIUS 3.2.10 (154 + 53 + 16 + 34 + 24 + 12 end-to-end checks), rates measured by iperf3, 2000 sessions on one 236 MB VM and
 150 simultaneous real clients through the portal, upgrades from 0.7.0 through the signed feed. Packages
 build with the official 24.10 (ipk) and 25.12 (apk) SDKs. The unit tests and the end-to-end suites also run on
@@ -199,12 +199,14 @@ echo 'src/gz wrthotspot https://github.com/usamakkhan/wrt-hotspot/releases/lates
 opkg update && opkg install wrt-hotspot-full
 ```
 
-To stay on one version instead, use `releases/download/v0.8.1/` in place of `releases/latest/download/`.
+Routers that were set up with a versioned URL (`releases/download/v0.8.0/` and so on) get updates too:
+every release also republishes the current feed into the older releases.
 
-**Publishing a release:** build both feeds (`scripts/build-packages.sh`), create the release with every
-file of `dist/24.10.8/` and `dist/25.12.6/` except `index.json`, and mark it Latest. Then also upload
-the new packages and index files (`Packages*`, `packages.adb`) with `--clobber` to the older releases
-(from v0.8.0 on): routers that were set up with a versioned URL then see the update too.
+**Publishing a release:** build both feeds with `scripts/build-packages.sh 24.10.8` and
+`scripts/build-packages.sh 25.12.6` (on the machine that holds the signing keys), then run
+`scripts/publish-release.sh <version> <notes.md>`. It checks the feeds, creates the release as
+Latest, copies the feed into every older release, and downloads the indexes again from each feed
+URL to confirm they serve the new version.
 
 Release downloads only work without a login while the repository is public; for a private
 repository, serve the `dist/<release>/` directory from your own web server instead and use its URL.

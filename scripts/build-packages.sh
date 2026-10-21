@@ -89,10 +89,18 @@ done
 # Signed feed: one project key per index format, kept outside the SDK so
 # that every build (and every release) is signed by the same key.
 echo "== signed feed"
+# A missing key is never replaced silently: routers trust the published
+# public keys, and a feed signed with a new key fails their updates.
+newkey() {
+	[ "${WRTHOTSPOT_NEW_KEYS:-0}" = 1 ] && return 0
+	echo "signing key $1 not found in $KEYS: restore it from the backup, or set WRTHOTSPOT_NEW_KEYS=1 for a new feed (installed routers then need the new public key)" >&2
+	exit 1
+}
 mkdir -p "$KEYS"
 if [ -x staging_dir/host/bin/apk ] && grep -q mkndx package/Makefile; then
 	# 25.12+: apk index signed with an EC key.
 	[ -f "$KEYS/apk-private.pem" ] || {
+		newkey apk-private.pem
 		openssl ecparam -name prime256v1 -genkey -noout -out "$KEYS/apk-private.pem"
 		openssl ec -in "$KEYS/apk-private.pem" -pubout -out "$KEYS/apk-public.pem" 2>/dev/null
 		echo "   new apk signing key in $KEYS"
@@ -103,6 +111,7 @@ if [ -x staging_dir/host/bin/apk ] && grep -q mkndx package/Makefile; then
 else
 	# 24.10: opkg index signed with usign.
 	[ -f "$KEYS/usign.key" ] || {
+		newkey usign.key
 		staging_dir/host/bin/usign -G -s "$KEYS/usign.key" -p "$KEYS/usign.pub" -c "WrtHotspot feed"
 		echo "   new usign signing key in $KEYS"
 	}
