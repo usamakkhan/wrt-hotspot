@@ -23,6 +23,8 @@
 - Free memory is sampled every minute and the best of the last 10 samples counts: the limits stay steady through reloads and package installs.
 - `portal_max_requests` defaults to 8 workers up to 64 MB of RAM, 16 up to 128 MB, 32 above (was 32 everywhere, up to 13 MB in a burst of new clients).
 - LuCI, `wrthotspot status` and diagnostics say when the minimum applies, when the conntrack table limits, and when flash is short.
+- **Lite mode for slow routers** (`option lite`, automatic up to 64 MB of RAM, switch in LuCI → Settings): a login and a logout each start one process instead of up to four and six. Rate limits use nftables policing instead of tc HTB (no burst, priority or fair queuing), the last check interval of traffic before a logout is not counted, and connections of logged-out clients expire on their own. Logouts were about 3× faster on an emulated 64 MB router.
+- With nftables policing (lite or not), a login's rate limit goes into the same `nft` batch as the session: one process less per login.
 - **Faster portal on slow CPUs.** On a MIPS 24Kc the login page takes 122 ms instead of 169 ms and a CSS or image file 82 ms instead of 115 ms; rendering the pages is almost 4× faster. Regular expressions are slow in ucode on such CPUs, so the template engine and the per-request helpers now use string functions only, and the portal gets its settings from hotspotd instead of parsing the whole configuration on every request. Pages render exactly as before.
 
 ### Tests

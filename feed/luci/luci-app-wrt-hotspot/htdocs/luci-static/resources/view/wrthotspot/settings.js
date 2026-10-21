@@ -52,6 +52,14 @@ return view.extend({
 		o.datatype = 'range(2,256)';
 		o.placeholder = cap.portal_workers ? String(cap.portal_workers) : _('automatic');
 
+		o = s.taboption('general', form.ListValue, 'lite', _('Lite mode'),
+			_('For slow routers: each login and logout starts one process instead of up to four. Rate limits use nftables policing (no burst, priority or fair queuing), traffic of the last %s before a logout is not counted, and connections of logged-out clients expire on their own. Now: %s.').format(
+				_('check interval'), st.lite ? _('on') : _('off')));
+		o.value('auto', _('automatic (on up to 64 MB of RAM)'));
+		o.value('1', _('on'));
+		o.value('0', _('off'));
+		o.default = 'auto';
+
 		/* Capacity */
 
 		o = s.taboption('capacity', form.DummyValue, '_capacity', _('This router'));

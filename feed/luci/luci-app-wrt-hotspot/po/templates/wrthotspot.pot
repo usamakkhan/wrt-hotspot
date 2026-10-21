@@ -17,7 +17,7 @@ msgstr ""
 msgid "%s (larger than %s)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:76
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:84
 msgid "%s RAM tier, %s mode: %d / %d sessions, %d / %d user accounts."
 msgstr ""
 
@@ -29,7 +29,7 @@ msgstr ""
 msgid "<code>received</code> = use Acct-Interim-Interval from the server, or a duration."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:89
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:97
 msgid "<em>safe</em>: largest free-memory buffer, fewer users, best performance. <em>balanced</em>: a middle way. <em>max</em>: most users, little headroom for heavy traffic."
 msgstr ""
 
@@ -57,7 +57,7 @@ msgstr ""
 msgid "A zip with login.html at the top or inside one folder. Allowed: %s. At most %s per file, %s and %d files per set."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:66
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:74
 msgid "above the recommended capacity"
 msgstr ""
 
@@ -125,7 +125,7 @@ msgstr ""
 msgid "Addresses"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:161
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:169
 msgid "Addresses or networks that may connect. Empty = the RADIUS servers and the router itself."
 msgstr ""
 
@@ -145,11 +145,11 @@ msgstr ""
 msgid "allow"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:104
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:112
 msgid "Allow logins beyond the limit"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:160
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:168
 msgid "Allowed clients"
 msgstr ""
 
@@ -165,7 +165,7 @@ msgstr ""
 msgid "Announce captive portal (RFC 8910)"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:145
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:153
 msgid "Answers MikroTik API requests on TCP (online users, disconnect, hotspot users) for billing systems that manage the router that way, e.g. SAS4. Open the port in the firewall for the billing server only."
 msgstr ""
 
@@ -173,15 +173,15 @@ msgstr ""
 msgid "any"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:155
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:163
 msgid "API password"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:147
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:155
 msgid "API port"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:152
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:160
 msgid "API user"
 msgstr ""
 
@@ -189,11 +189,15 @@ msgstr ""
 msgid "Auth port"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:53 htdocs/luci-static/resources/view/wrthotspot/settings.js:84 htdocs/luci-static/resources/view/wrthotspot/settings.js:124
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:53 htdocs/luci-static/resources/view/wrthotspot/settings.js:92 htdocs/luci-static/resources/view/wrthotspot/settings.js:132
 msgid "automatic"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:91
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:58
+msgid "automatic (on up to 64 MB of RAM)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:99
 msgid "balanced"
 msgstr ""
 
@@ -225,15 +229,15 @@ msgstr ""
 msgid "Capacity"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:82
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:90
 msgid "Capacity limits"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:63
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:71
 msgid "Capacity limits are off."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:113
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:121
 msgid "Certificate"
 msgstr ""
 
@@ -249,6 +253,10 @@ msgstr ""
 msgid "Check interval"
 msgstr ""
 
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:57
+msgid "check interval"
+msgstr ""
+
 #: htdocs/luci-static/resources/view/wrthotspot/diagnostics.js:110
 msgid "Choose a network"
 msgstr ""
@@ -257,7 +265,7 @@ msgstr ""
 msgid "Choose a zip file"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:105
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:113
 msgid "Clients are let in even when the router is full; this is logged as a warning."
 msgstr ""
 
@@ -277,7 +285,7 @@ msgstr ""
 msgid "Cookies"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:140
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:148
 msgid "CoovaChilli compatible"
 msgstr ""
 
@@ -293,7 +301,7 @@ msgstr ""
 msgid "Damaged zip file"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:189
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:197
 msgid "Database directory"
 msgstr ""
 
@@ -449,8 +457,12 @@ msgstr ""
 msgid "Fix"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:173
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:181
 msgid "Flash write interval"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:56
+msgid "For slow routers: each login and logout starts one process instead of up to four. Rate limits use nftables policing (no burst, priority or fair queuing), traffic of the last %s before a logout is not counted, and connections of logged-out clients expire on their own. Now: %s."
 msgstr ""
 
 #: htdocs/luci-static/resources/view/wrthotspot/limitations.js:29
@@ -469,7 +481,7 @@ msgstr ""
 msgid "General"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:141
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:149
 msgid "Generic (RFC attributes only)"
 msgstr ""
 
@@ -485,7 +497,7 @@ msgstr ""
 msgid "Hotspot"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:156
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:164
 msgid "Hotspot admin operators can log in as well."
 msgstr ""
 
@@ -509,7 +521,7 @@ msgstr ""
 msgid "Hotspot users"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/diagnostics.js:80 htdocs/luci-static/resources/view/wrthotspot/pages.js:459 htdocs/luci-static/resources/view/wrthotspot/settings.js:61
+#: htdocs/luci-static/resources/view/wrthotspot/diagnostics.js:80 htdocs/luci-static/resources/view/wrthotspot/pages.js:459 htdocs/luci-static/resources/view/wrthotspot/settings.js:69
 msgid "hotspotd is not running"
 msgstr ""
 
@@ -521,7 +533,7 @@ msgstr ""
 msgid "How often counters, timeouts, limits and bursts are evaluated."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:138
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:146
 msgid "How RADIUS requests look. <em>MikroTik</em> for servers that expect a RouterOS hotspot: SAS4, Radius Manager, Splynx, User Manager, daloRADIUS. <em>CoovaChilli</em> for RADIUSdesk, HotspotSystem and other UAM billing."
 msgstr ""
 
@@ -529,7 +541,7 @@ msgstr ""
 msgid "How users log in (MikroTik /ip hotspot profile)."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:123
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:131
 msgid "HTB shaping needs the <em>wrt-hotspot-shaper</em> package; otherwise traffic is policed by nftables."
 msgstr ""
 
@@ -561,7 +573,7 @@ msgstr ""
 msgid "HTTPS"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:109
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:117
 msgid "HTTPS port"
 msgstr ""
 
@@ -613,15 +625,19 @@ msgstr ""
 msgid "Limits applied to users (MikroTik /ip hotspot user profile). RADIUS attributes override them; Mikrotik-Group selects a profile."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:83
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:91
 msgid "Limits computed from the router's RAM and flash keep enough memory free for routing and Wi-Fi."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:74
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:55
+msgid "Lite mode"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:82
 msgid "Little free flash for the user database."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:70
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:78
 msgid "Little free memory: the minimum of %d sessions is allowed. The balanced or max mode fits more."
 msgstr ""
 
@@ -705,19 +721,19 @@ msgstr ""
 msgid "MAC format"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:92
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:100
 msgid "max"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:96
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:104
 msgid "Maximum sessions"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:100
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:108
 msgid "Maximum user accounts"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:139
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:147
 msgid "MikroTik compatible"
 msgstr ""
 
@@ -729,7 +745,7 @@ msgstr ""
 msgid "MikroTik syntax, rx = upload, tx = download, bits/s with k/M/G: <code>rx/tx [rx-burst/tx-burst [rx-threshold/tx-threshold [rx-time/tx-time [priority [rx-min/tx-min]]]]]</code>, e.g. <code>2M/10M</code> or <code>1M/4M 2M/8M 768k/3M 8/8</code>."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:88
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:96
 msgid "Mode"
 msgstr ""
 
@@ -781,7 +797,7 @@ msgstr ""
 msgid "never reset"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:126 htdocs/luci-static/resources/view/wrthotspot/status.js:44
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:134 htdocs/luci-static/resources/view/wrthotspot/status.js:44
 msgid "nftables policing"
 msgstr ""
 
@@ -833,16 +849,20 @@ msgstr ""
 msgid "not logged in"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:127 htdocs/luci-static/resources/view/wrthotspot/status.js:44
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:57 htdocs/luci-static/resources/view/wrthotspot/settings.js:60 htdocs/luci-static/resources/view/wrthotspot/settings.js:135 htdocs/luci-static/resources/view/wrthotspot/status.js:44
 msgid "off"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:85
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:93
 msgid "off (no limits)"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/wrthotspot/diagnostics.js:9
 msgid "OK"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:57 htdocs/luci-static/resources/view/wrthotspot/settings.js:59
+msgid "on"
 msgstr ""
 
 #: htdocs/luci-static/resources/view/wrthotspot/profiles.js:85
@@ -885,7 +905,7 @@ msgstr ""
 msgid "Password sent for MAC logins (some RADIUS servers reject empty ones)."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:114
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:122
 msgid "PEM or DER. <code>wrthotspot cert &lt;dns-name&gt;</code> creates a self-signed one for testing; use a real certificate (e.g. ACME) in production."
 msgstr ""
 
@@ -909,7 +929,7 @@ msgstr ""
 msgid "Portal port"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:117
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:125
 msgid "Private key"
 msgstr ""
 
@@ -933,7 +953,7 @@ msgstr ""
 msgid "RADIUS"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:137
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:145
 msgid "RADIUS server type"
 msgstr ""
 
@@ -941,7 +961,7 @@ msgstr ""
 msgid "Rate limit"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:27 htdocs/luci-static/resources/view/wrthotspot/settings.js:122 htdocs/luci-static/resources/view/wrthotspot/status.js:51
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:27 htdocs/luci-static/resources/view/wrthotspot/settings.js:130 htdocs/luci-static/resources/view/wrthotspot/status.js:51
 msgid "Rate limiting"
 msgstr ""
 
@@ -981,15 +1001,15 @@ msgstr ""
 msgid "Replace page set?"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:97
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:105
 msgid "Replaces the computed value. Empty = automatic (%d now)."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:101
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:109
 msgid "Replaces the computed value. Empty = automatic (%d now). Admins can still add more after a warning."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:165
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:173
 msgid "Reported RouterOS version"
 msgstr ""
 
@@ -997,7 +1017,7 @@ msgstr ""
 msgid "Require Message-Authenticator"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:78
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:86
 msgid "Reserve %s kept free, about %s per session."
 msgstr ""
 
@@ -1017,15 +1037,15 @@ msgstr ""
 msgid "RFC 5176 listener, 0 to disable. Allow this UDP port from a RADIUS server outside the router in the firewall."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:131
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:139
 msgid "Root rate of the HTB trees; keep it above the real link speed."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:144
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:152
 msgid "RouterOS API"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:90
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:98
 msgid "safe"
 msgstr ""
 
@@ -1081,7 +1101,7 @@ msgstr ""
 msgid "Session timeout"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:72
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:80
 msgid "Sessions limited by the connection tracking table (%d entries)."
 msgstr ""
 
@@ -1101,7 +1121,7 @@ msgstr ""
 msgid "Settings"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:130
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:138
 msgid "Shaper capacity"
 msgstr ""
 
@@ -1129,7 +1149,7 @@ msgstr ""
 msgid "Single address when combined with a MAC."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:166
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:174
 msgid "Some billing systems pick their commands by version."
 msgstr ""
 
@@ -1141,7 +1161,7 @@ msgstr ""
 msgid "State"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:186
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:194
 msgid "State directory"
 msgstr ""
 
@@ -1161,7 +1181,7 @@ msgstr ""
 msgid "Sunday"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:125 htdocs/luci-static/resources/view/wrthotspot/status.js:44
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:133 htdocs/luci-static/resources/view/wrthotspot/status.js:44
 msgid "tc HTB shaping"
 msgstr ""
 
@@ -1193,7 +1213,7 @@ msgstr ""
 msgid "This browser cannot unpack compressed zip files. Use a current Chrome, Firefox, Edge or Safari, or zip with \"store\" (no compression)."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:57
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:65
 msgid "This router"
 msgstr ""
 
@@ -1393,7 +1413,7 @@ msgstr ""
 msgid "Users of this profile may only be online inside one of these windows."
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:174
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:182
 msgid "Users' usage counters and cookies are written to flash this often."
 msgstr ""
 
@@ -1409,11 +1429,11 @@ msgstr ""
 msgid "Walled Garden"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:182
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:190
 msgid "Walled garden address lifetime"
 msgstr ""
 
-#: htdocs/luci-static/resources/view/wrthotspot/settings.js:178
+#: htdocs/luci-static/resources/view/wrthotspot/settings.js:186
 msgid "Walled garden resolve interval"
 msgstr ""
 

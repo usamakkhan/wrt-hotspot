@@ -59,6 +59,10 @@ emulated MIPS (big-endian, 128 MB) and ARM routers in QEMU (`tests/emu/`); physi
   router gets about 55 / 170 / 260 sessions, never fewer than 10. Logins beyond the limit are
   refused ("the hotspot is full") unless `capacity_override` is set; adding users beyond it needs an
   admin to confirm a warning. Manual `max_sessions` / `max_users` override the computed values.
+- Lite mode for slow routers (`option lite`, automatic up to 64 MB of RAM): one process per login
+  and logout instead of up to four. Rate limits use nftables policing (no burst, priority or fair
+  queuing), the last check interval of traffic before a logout is not counted, and connections of
+  logged-out clients expire on their own instead of being flushed.
 - Third-party RADIUS / billing: presets for MikroTik-style servers (SAS4, Radius Manager, Splynx,
   User Manager, daloRADIUS) and CoovaChilli-style ones (RADIUSdesk, HotspotSystem); ChilliSpot and
   Ascend attributes; a RouterOS API subset on tcp/8728 so billing systems can list and disconnect

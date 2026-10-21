@@ -125,6 +125,7 @@ export function create(opts) {
 	let cap = null;			// capacity limits (capacity.uc); 0 = unlimited
 	let cap_warned = 0;
 	let mem_samples = [];		// [ MemAvailable, sessions, users, time ], last 10 minutes
+	let lite = false;		// lite mode in force (cfg.global.lite resolved, see setup_shaper)
 	let last_mem_sample = 0;
 	let last_rates = 0;
 	let try_mac_cookie;		// defined below, used by self.client
@@ -589,6 +590,7 @@ export function create(opts) {
 
 		return {
 			shaper: (shp == null) ? 'off' : (shp == 'nft') ? 'nft' : 'tc',
+			lite,
 			radius: radius != null,
 			radius_backlog: rad.backlog(),
 			coa_listening: !!coa,
@@ -1042,6 +1044,18 @@ export function create(opts) {
 
 	setup_shaper = function() {
 		let want = cfg.global.shaper;
+		let was_lite = lite;
+
+		// Lite mode (slow routers): every login and logout costs one nft
+		// process instead of nft + tc (+ a counter read + conntrack).
+		lite = (cfg.global.lite == 'on') ||
+			(cfg.global.lite == 'auto' && int(match(fs.readfile('/proc/meminfo') ?? '', /MemTotal:[[:space:]]+([0-9]+)/)?.[1] ?? 0) <= 70000);
+
+		if (lite != was_lite || !started)
+			log('info', 'Lite mode %s%s', lite ? 'on' : 'off', (cfg.global.lite == 'auto') ? ' (automatic, by RAM)' : '');
+
+		if (lite && want == 'auto')
+			want = 'nft';
 
 		if (shp && shp != 'nft')
 			shp.teardown();
@@ -1170,7 +1184,9 @@ export function create(opts) {
 		return user_profile(s.profile).rate_limit ?? '';
 	}
 
-	function apply_rate(s, force) {
+	// batch: with the nft shaper, append the commands there instead of
+	// running nft (a login adds its policers to the session's own batch).
+	function apply_rate(s, force, batch) {
 		let str = session_rate(s);
 		let p = shaper.parse_rate_limit(str);
 
@@ -1195,7 +1211,11 @@ export function create(opts) {
 
 		if (shp == 'nft') {
 			s.nft_lim = p ? { up: shaper.nft_limit(ceil.rx), down: shaper.nft_limit(ceil.tx) } : null;
-			exec(nft.session_limit_cmds(s.slot, s.nft_lim));
+
+			if (batch)
+				push(batch, ...nft.session_limit_cmds(s.slot, s.nft_lim));
+			else
+				exec(nft.session_limit_cmds(s.slot, s.nft_lim));
 			return;
 		}
 
@@ -1345,7 +1365,14 @@ export function create(opts) {
 		sessions[slot] = s;
 		by_mac[mac] = slot;
 
-		let err = exec(nft.session_add_cmds(slot, mac));
+		// With nft policing the session's rate limit goes into the same batch:
+		// one nft process per login (on a slow CPU each one is ~50 ms).
+		let cmds = nft.session_add_cmds(slot, mac);
+
+		if (shp == 'nft')
+			apply_rate(s, true, cmds);
+
+		let err = exec(cmds);
 		if (err) {
 			delete sessions[slot];
 			delete by_mac[mac];
@@ -1358,7 +1385,9 @@ export function create(opts) {
 		event('login', { user: username, mac, server, session_id: s.id, login_by });
 		run_hook(user_profile(profile).on_login, hook_env(s));
 		acct_send(s, ACCT_START);
-		apply_rate(s, true);
+
+		if (shp != 'nft')
+			apply_rate(s, true);
 
 		return [ s, null ];
 	}
@@ -1839,8 +1868,10 @@ export function create(opts) {
 	self.logout_many = function(list) {
 		let cmds = [];
 
-		// Final counter read so the last seconds of traffic are billed.
-		let kc = nft.read_counters(map(list, (item) => item[0]));
+		// Final counter read so the last seconds of traffic are billed. Lite
+		// mode skips it: the last poll's counters count (up to one
+		// poll_interval of traffic is not billed), one nft process less.
+		let kc = lite ? null : nft.read_counters(map(list, (item) => item[0]));
 
 		for (let item in list) {
 			let s = sessions[item[0]];
@@ -1860,8 +1891,11 @@ export function create(opts) {
 		exec(cmds);
 
 		// Established flows still carry the session's mark; with conntrack-tools
-		// installed, forget them so a reused slot never inherits them.
-		if (length(list) <= 16 && fs.access('/usr/sbin/conntrack', 'x'))
+		// installed, forget them so a reused slot never inherits them. (Lite
+		// mode leaves them to time out, one process per logout less: slots
+		// are handed out round-robin over 65519 values, so a slot comes back
+		// only after that many logins, long after its flows have expired.)
+		if (!lite && length(list) <= 16 && fs.access('/usr/sbin/conntrack', 'x'))
 			for (let item in list)
 				system(sprintf('/usr/sbin/conntrack -D -m %d/%d >/dev/null 2>&1', nft.slot_mark(+item[0]), 0xffff0000));
 

@@ -171,10 +171,28 @@ request although hotspotd already holds it. Now templates and the per-request he
 (`normalize_mac`, `normalize_ip`, page paths) use string functions only, and hotspotd hands the
 portal its settings in the `client` reply it already sent.
 
-Logins (~150–350 ms) and logouts (~400–500 ms) on this CPU are bound by the `nft` and `tc`
-processes each one starts (45–60 ms per process here); they did not change, and the emulator's
-timing swings by ±50% between runs. `nft -f` batches cannot read named counters (`list counter`
-fails inside a batch), so the final counter read of a logout stays a separate call.
+Logins and logouts are bound by the `nft` and `tc` processes each one starts (45–60 ms per process
+here; the emulator's timing swings by ±50% between runs). `nft -f` batches cannot read named counters
+(`list counter` fails inside a batch), so the final counter read of a logout is a separate call.
+
+### Lite mode (2026-10-21)
+
+`option lite` (automatic up to 64 MB of RAM) trades features for fewer processes. Counted with
+logging wrappers around `nft`, `tc` and `conntrack` on the emulated 64 MB armv7, one login and one
+logout of a rate-limited user (the test's 2 s poll adds about one `nft` counter read to each window):
+
+| | login | logout |
+|---|---|---|
+| lite off (tc HTB) | 2 nft + 2 tc | 3 nft + 2 tc + 1 conntrack |
+| lite on | 2 nft (one of them the poll) | 2 nft (one of them the poll) |
+
+Logout latency in the load test (50 clients, same router and code, only the option toggled):
+1648 ms p50 without lite, 543 ms with it. Login times on that router were too noisy to compare.
+
+What lite mode gives up: tc HTB (burst, priority, fair queuing; the rate limit itself stays, as
+nftables policing), the final counter read at logout (up to one `poll_interval` of traffic before a
+logout is not counted) and the conntrack flush (flows of a logged-out client expire on their own;
+slots are reused only after 65519 logins). `tests/integration/lite-test.sh` checks it.
 
 ## Emulated routers (QEMU)
 

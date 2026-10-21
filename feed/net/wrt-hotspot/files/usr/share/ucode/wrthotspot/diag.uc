@@ -135,8 +135,10 @@ export function run_checks(cfg, state) {
 
 	let tc = tc_available();
 	let backend = state?.shaper ?? 'unknown';
-	add('shaper', (backend == 'tc' || (!has_rates && backend != 'unknown')) ? 'ok' : (backend == 'nft' ? 'warn' : 'info'),
+	// Lite mode chooses nft policing on purpose: not worth a warning.
+	add('shaper', (backend == 'tc' || state?.lite || (!has_rates && backend != 'unknown')) ? 'ok' : (backend == 'nft' ? 'warn' : 'info'),
 		(backend == 'tc') ? 'Rate limits: tc HTB shaping'
+		: (backend == 'nft' && state?.lite) ? 'Rate limits: nftables policing (lite mode for a slow router)'
 		: (backend == 'nft') ? `Rate limits: nftables policing${tc ? '' : ' (install wrt-hotspot-shaper for HTB shaping)'}`
 		: (backend == 'off') ? 'Rate limits are switched off' : 'Rate limiting not active');
 

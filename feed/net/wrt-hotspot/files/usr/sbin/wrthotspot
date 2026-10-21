@@ -329,6 +329,7 @@ case 'status':
 			`${cp.users}/${cp.max_users} user accounts${cp.override ? ' (override on)' : ''}` +
 			`${cp.low_memory ? ' - little free memory, minimum allowed' : (cp.limited_by == 'conntrack') ? ' - limited by conntrack' : ''}\n`);
 	print(`  RADIUS: ${st.radius ? 'installed' : 'not installed (local users only)'}\n`);
+	print(`  rate limits: ${st.shaper}${st.lite ? ', lite mode' : ''}\n`);
 	for (let dev, srv in st.devices)
 		print(`  server ${srv} on ${dev}\n`);
 	break;

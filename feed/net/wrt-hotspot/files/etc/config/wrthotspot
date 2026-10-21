@@ -6,6 +6,11 @@ config global 'global'
 	# Concurrent portal requests (each a ~0.4 MB worker). Default by RAM:
 	# 8 up to 64 MB, 16 up to 128 MB, 32 above.
 	#option portal_max_requests '32'
+	# Lite mode for slow routers: one process per login/logout instead of up
+	# to four. nftables policing instead of tc HTB (no burst/priority), the
+	# last poll_interval of traffic before a logout is not counted, logged-out
+	# connections expire on their own. auto = on up to 64 MB of RAM; 1 or 0.
+	#option lite 'auto'
 	# HTTPS portal (login_by https, RFC 8908/8910). `wrthotspot cert <name>`
 	# creates a self-signed pair; use a real certificate in production.
 	#option https_port '8003'

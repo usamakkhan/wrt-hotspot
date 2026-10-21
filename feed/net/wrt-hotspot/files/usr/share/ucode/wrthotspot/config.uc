@@ -327,6 +327,10 @@ export function load(confdir) {
 			capacity_override: to_bool(g.capacity_override ?? '0'),
 			// Concurrent portal requests (uhttpd -n); 0 = by RAM (capacity.uc).
 			portal_max_requests: count(g.portal_max_requests),
+			// Lite mode for slow routers: fewer processes per login/logout
+			// (nft policing, no final counter read, no conntrack flush).
+			// auto = on up to 64 MB of RAM.
+			lite: (g.lite == null || g.lite == 'auto') ? 'auto' : (to_bool(g.lite) ? 'on' : 'off'),
 			// How RADIUS requests look (RADIUS_PRESETS above): mikrotik, coova or generic.
 			radius_preset: radius_preset(g.radius_preset ?? 'mikrotik'),
 			// RouterOS API subset for MikroTik billing systems (wrt-hotspot-radius).
