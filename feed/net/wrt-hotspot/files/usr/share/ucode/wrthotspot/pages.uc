@@ -8,6 +8,7 @@
 'use strict';
 
 import * as fs from 'fs';
+import { cursor } from 'uci';
 import { run, shell_quote } from 'wrthotspot.util';
 
 export const BUILTIN_DIR = '/usr/share/wrthotspot/pages';
@@ -31,7 +32,10 @@ export function valid_name(n) {
 // Same rule as the portal's page_path(), plus: no hidden files, an allowed
 // extension and at most 4 levels.
 export function valid_path(p) {
-	if (type(p) != 'string' || length(p) > 128 || !match(p, /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/))
+	// (the portal refuses any name containing "..": such a file would upload
+	// but never be served)
+	if (type(p) != 'string' || length(p) > 128 || !match(p, /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/) ||
+	    index(p, '..') >= 0)
 		return false;
 
 	let parts = split(p, '/');
@@ -158,8 +162,23 @@ export function read(name, path, offset) {
 	return [ { data: b64enc(data), size: st.size, eof: offset + length(data) >= st.size }, null ];
 };
 
-function stage(name) {
-	return `${STAGE_DIR}/${name}`;
+// Each upload has its own area (name + random token), so two uploads of the
+// same name cannot mix or wipe each other's files; the later commit wins.
+function stage(name, token) {
+	return `${STAGE_DIR}/${name}.${token}`;
+}
+
+function valid_upload(name, token) {
+	return valid_name(name) && type(token) == 'string' && !!match(token, /^[0-9a-f]{16}$/) &&
+		fs.stat(stage(name, token))?.type == 'directory';
+}
+
+function new_token() {
+	let f = fs.open('/dev/urandom', 'r');
+	let b = f?.read(8);
+	f?.close();
+
+	return (b && length(b) == 8) ? join('', map(split(b, ''), (c) => sprintf('%02x', ord(c)))) : null;
 }
 
 function mkdirs(path) {
@@ -178,27 +197,31 @@ function mkdirs(path) {
 	return true;
 }
 
+// -> [ token, error ]
 export function begin(name) {
 	if (!valid_name(name))
-		return 'invalid name: use 1-32 letters, digits, "-" or "_"';
+		return [ null, 'invalid name: use 1-32 letters, digits, "-" or "_"' ];
 
 	if (fs.stat(`${BUILTIN_DIR}/${name}`))
-		return `"${name}" is a built-in page set: choose another name`;
-
-	run(`rm -rf ${shell_quote(stage(name))}`);
+		return [ null, `"${name}" is a built-in page set: choose another name` ];
 
 	// Abandoned uploads (browser closed mid-way) would hold RAM in /tmp until
 	// a reboot: drop any that saw no chunk for 10 minutes.
 	for (let e in (fs.lsdir(STAGE_DIR) ?? []))
-		if (valid_name(e) && (fs.stat(`${STAGE_DIR}/${e}`)?.mtime ?? 0) < time() - STAGE_TTL)
-			run(`rm -rf ${shell_quote(stage(e))}`);
+		if (match(e, /^[A-Za-z0-9_-]{1,32}\.[0-9a-f]{16}$/) && (fs.stat(`${STAGE_DIR}/${e}`)?.mtime ?? 0) < time() - STAGE_TTL)
+			run(`rm -rf ${shell_quote(`${STAGE_DIR}/${e}`)}`);
 
-	return mkdirs(stage(name)) ? null : 'cannot create the upload area';
+	let token = new_token();
+
+	if (!token || !mkdirs(stage(name, token)))
+		return [ null, 'cannot create the upload area' ];
+
+	return [ token, null ];
 };
 
 // offset = where this chunk goes; 0 starts the file. Chunks arrive in order.
-export function put(name, path, data, offset) {
-	if (!valid_name(name) || fs.stat(stage(name))?.type != 'directory')
+export function put(name, token, path, data, offset) {
+	if (!valid_upload(name, token))
 		return 'no upload in progress for this name';
 
 	if (!valid_path(path))
@@ -209,7 +232,7 @@ export function put(name, path, data, offset) {
 	if (bytes == null)
 		return 'invalid data';
 
-	let p = `${stage(name)}/${path}`;
+	let p = `${stage(name, token)}/${path}`;
 	let have = fs.stat(p)?.size ?? 0;
 
 	offset = int(offset ?? 0);
@@ -220,7 +243,7 @@ export function put(name, path, data, offset) {
 	if (offset + length(bytes) > MAX_FILE)
 		return `${path}: larger than ${MAX_FILE / 1024} KiB`;
 
-	let staged = files_in(stage(name));
+	let staged = files_in(stage(name, token));
 
 	if (offset == 0 && !fs.stat(p) && length(staged) >= MAX_FILES)
 		return `more than ${MAX_FILES} files`;
@@ -248,15 +271,16 @@ function free_kib(path) {
 	return m ? int(m[1]) : null;
 }
 
-export function commit(name) {
-	if (!valid_name(name) || fs.stat(stage(name))?.type != 'directory')
+export function commit(name, token) {
+	if (!valid_upload(name, token))
 		return [ null, 'no upload in progress for this name' ];
 
-	let f = files_in(stage(name));
+	let src = stage(name, token);
+	let f = files_in(src);
 	let size = total(f);
-	let abort = (msg) => { run(`rm -rf ${shell_quote(stage(name))}`); return [ null, msg ]; };
+	let abort = (msg) => { run(`rm -rf ${shell_quote(src)}`); return [ null, msg ]; };
 
-	if (!fs.stat(`${stage(name)}/login.html`))
+	if (!fs.stat(`${src}/login.html`))
 		return abort('the page set has no login.html at its top level');
 
 	mkdirs(CUSTOM_DIR);
@@ -269,10 +293,10 @@ export function commit(name) {
 
 	let dest = `${CUSTOM_DIR}/${name}`;
 	let q = shell_quote;
-	let r = run(`rm -rf ${q(dest + '.new')} && cp -R ${q(stage(name))} ${q(dest + '.new')} && ` +
+	let r = run(`rm -rf ${q(dest + '.new')} && cp -R ${q(src)} ${q(dest + '.new')} && ` +
 		`rm -rf ${q(dest)} && mv ${q(dest + '.new')} ${q(dest)}`);
 
-	run(`rm -rf ${q(stage(name))} ${q(dest + '.new')}`);
+	run(`rm -rf ${q(src)} ${q(dest + '.new')}`);
 
 	if (r.code != 0)
 		return [ null, `cannot install: ${trim(r.out)}` ];
@@ -289,7 +313,16 @@ export function remove(name, cfg) {
 	if (s.builtin)
 		return 'built-in page sets cannot be removed';
 
+	// The running config, and the saved one: a profile switched to this set
+	// but not reloaded yet must not lose its pages.
 	let u = used_by(cfg, s.dir);
+	let c = cursor();
+
+	c.foreach('wrthotspot', 'server_profile', (sp) => {
+		let n = sp.name ?? sp['.name'];
+		if (replace(sp.html_directory ?? '', /\/+$/, '') == s.dir && !(n in u))
+			push(u, n);
+	});
 
 	if (length(u))
 		return `in use by server profile ${join(', ', u)}`;

@@ -18,8 +18,8 @@ var callList = rpc.declare({ object: 'wrthotspot', method: 'pages_list' });
 var callFiles = rpc.declare({ object: 'wrthotspot', method: 'pages_files', params: [ 'name' ] });
 var callRead = rpc.declare({ object: 'wrthotspot', method: 'pages_read', params: [ 'name', 'path', 'offset' ] });
 var callBegin = rpc.declare({ object: 'wrthotspot', method: 'pages_begin', params: [ 'name' ] });
-var callPut = rpc.declare({ object: 'wrthotspot', method: 'pages_put', params: [ 'name', 'path', 'data', 'offset' ] });
-var callCommit = rpc.declare({ object: 'wrthotspot', method: 'pages_commit', params: [ 'name' ] });
+var callPut = rpc.declare({ object: 'wrthotspot', method: 'pages_put', params: [ 'name', 'token', 'path', 'data', 'offset' ] });
+var callCommit = rpc.declare({ object: 'wrthotspot', method: 'pages_commit', params: [ 'name', 'token' ] });
 var callRemove = rpc.declare({ object: 'wrthotspot', method: 'pages_remove', params: [ 'name' ] });
 
 var DOCS = 'https://github.com/usamakkhan/wrt-hotspot#custom-login-pages';
@@ -77,7 +77,8 @@ function makeZip(files) {
 		lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
 
 		var ch = new DataView(new ArrayBuffer(46));
-		ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true);
+		// made by: Unix (3), spec 2.0 - so unzip honours the 0644 modes below
+		ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 0x0314, true); ch.setUint16(6, 20, true);
 		ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true); ch.setUint16(12, dosTime, true);
 		ch.setUint16(14, dosDate, true); ch.setUint32(16, crc, true); ch.setUint32(20, size, true);
 		ch.setUint32(24, size, true); ch.setUint16(28, name.length, true);
@@ -192,7 +193,8 @@ function prepare(files, info) {
 	var ok = files.filter(function(f) {
 		var parts = f.path.split('/');
 		var ext = (f.path.match(/\.([A-Za-z0-9]+)$/) || [])[1];
-		var good = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/.test(f.path) && f.path.length <= 128 && parts.length <= 4 &&
+		var good = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+)*$/.test(f.path) && f.path.indexOf('..') < 0 &&
+			f.path.length <= 128 && parts.length <= 4 &&
 			parts.every(function(p) { return p.charAt(0) != '.'; }) &&
 			ext && info.extensions.indexOf(ext.toLowerCase()) >= 0;
 
@@ -323,7 +325,7 @@ return view.extend({
 				if (failed(res))
 					throw new Error(res ? res.error : _('No answer'));
 
-				var f = prepared.files, chunk = info.limits.chunk;
+				var f = prepared.files, chunk = info.limits.chunk, token = res.token;
 
 				var put = L.bind(function(i, offset) {
 					if (i >= f.length)
@@ -332,7 +334,7 @@ return view.extend({
 					var data = f[i].data;
 					this.step(_('Uploading %s (%d of %d)').format(f[i].path, i + 1, f.length));
 
-					return callPut(name, f[i].path, toBase64(data.subarray(offset, offset + chunk)), offset).then(function(r) {
+					return callPut(name, token, f[i].path, toBase64(data.subarray(offset, offset + chunk)), offset).then(function(r) {
 						if (failed(r))
 							throw new Error(r ? r.error : _('No answer'));
 
@@ -340,10 +342,8 @@ return view.extend({
 					});
 				}, this);
 
-				return put(0, 0);
-			}, this)).then(function() {
-				return callCommit(name);
-			}).then(L.bind(function(res) {
+				return put(0, 0).then(function() { return callCommit(name, token); });
+			}, this)).then(L.bind(function(res) {
 				if (failed(res))
 					throw new Error(res ? res.error : _('No answer'));
 

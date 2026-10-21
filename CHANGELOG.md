@@ -9,7 +9,7 @@
 - MikroTik page sets now really work unmodified:
   - quoted comparisons (`$(if trial == 'yes')`, `$(if error == "")`) were compared with the quotes and never matched;
   - the stock trial link (`username=T-$(mac-esc)`) starts a trial.
-- The portal serves `.webp` and `.woff` files.
+- The portal serves `.webp` and `.woff` files. CSS, images and scripts are revalidated (ETag) instead of cached for an hour, so a replaced page set shows at once.
 
 ### Fixes (found on emulated MIPS and ARM routers)
 

@@ -24,6 +24,7 @@ ok(!valid_path('run.sh'), 'script extension');
 ok(!valid_path('cgi-bin/x'), 'no extension');
 ok(!valid_path('a b.html'), 'space');
 ok(!valid_path('a//b.html'), 'empty segment');
+ok(!valid_path('js/app..min.js'), '".." inside a name (the portal never serves it)');
 ok(!valid_path(sprintf('%0130d.html', 0)), 'too long');
 ok(!valid_path(null), 'no path');
 eq('sh' in EXTENSIONS, false, 'no shell scripts');

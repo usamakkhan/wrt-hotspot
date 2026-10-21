@@ -190,14 +190,26 @@ function render_page(sp, name, vars, headers) {
 	send_response('200 OK', { ...(headers ?? {}), 'Content-Type': 'text/html; charset=utf-8' }, tpl.render(fs.readfile(p), vars));
 }
 
-function serve_static(sp, path) {
+// Revalidated, not cached for a fixed time: an admin may replace the page set
+// (same file names, new content) at any moment. The ETag (inode, mtime, size)
+// changes with every replacement, even one within the same second.
+function serve_static(env, sp, path) {
 	let p = page_path(sp, path);
 
 	if (!p || match(path, /\.html$/))
 		return false;
 
 	let ext = lc(match(path, /\.([A-Za-z0-9]+)$/)?.[1] ?? '');
-	send_response('200 OK', { 'Content-Type': MIME[ext] ?? 'application/octet-stream', 'Cache-Control': 'max-age=3600' }, fs.readfile(p));
+	let st = fs.stat(p);
+	let etag = sprintf('"%x-%x-%x"', st?.inode ?? 0, st?.mtime ?? 0, st?.size ?? 0);
+	let headers = { 'Content-Type': MIME[ext] ?? 'application/octet-stream', 'Cache-Control': 'no-cache', ETag: etag };
+
+	// (uhttpd maps only some headers to HTTP_*; the rest are in env.headers)
+	if (env.headers?.['if-none-match'] == etag)
+		send_response('304 Not Modified', headers, null);
+	else
+		send_response('200 OK', headers, fs.readfile(p));
+
 	return true;
 }
 
@@ -440,7 +452,7 @@ global.handle_request = function(env) {
 		return;
 	}
 
-	if (serve_static(sp, substr(path, 1)))
+	if (serve_static(env, sp, substr(path, 1)))
 		return;
 
 	send_response('404 Not Found', { 'Content-Type': 'text/plain' }, 'not found\n');

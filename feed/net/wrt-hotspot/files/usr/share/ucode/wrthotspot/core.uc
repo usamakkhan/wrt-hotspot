@@ -472,7 +472,7 @@ export function create(opts) {
 			cap.tier.label, cap.mode, cap.max_sessions, cap.max_users,
 			g.capacity_override ? ' (override: logins beyond the limit are allowed)' : '');
 
-		if (cap.exhausted && !(g.max_sessions > 0))
+		if (cap.exhausted && !(g.max_sessions > 0) && !g.capacity_override)
 			log('warn', 'Capacity: free memory (%d KiB) is below the %s-mode reserve (%d KiB), so only 1 session is allowed: free memory, use capacity_mode balanced or max, or set max_sessions / capacity_override',
 				meminfo_kb('MemAvailable'), cap.mode, cap.reserve_kb);
 	}

@@ -399,24 +399,24 @@ export function publish(conn, core) {
 		pages_begin: {
 			args: { name: '' },
 			call: function(req) {
-				let e = pages.begin(req.args.name);
-				return e ? err(e) : { ok: true };
+				let r = pages.begin(req.args.name);
+				return r[0] ? { ok: true, token: r[0] } : err(r[1]);
 			},
 		},
 
 		pages_put: {
-			args: { name: '', path: '', data: '', offset: 0 },
+			args: { name: '', token: '', path: '', data: '', offset: 0 },
 			call: function(req) {
 				let a = req.args;
-				let e = pages.put(a.name, a.path, a.data, a.offset);
+				let e = pages.put(a.name, a.token, a.path, a.data, a.offset);
 				return e ? err(e) : { ok: true };
 			},
 		},
 
 		pages_commit: {
-			args: { name: '' },
+			args: { name: '', token: '' },
 			call: function(req) {
-				let r = pages.commit(req.args.name);
+				let r = pages.commit(req.args.name, req.args.token);
 				return r[0] ? { ok: true, ...r[0] } : err(r[1]);
 			},
 		},

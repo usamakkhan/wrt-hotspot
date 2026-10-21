@@ -52,8 +52,11 @@ cd "$DIR"
 # dependencies (tc-full, uhttpd, luci-base, ...), which the router installs.
 # src-cpy, not src-link: a linked feed records the absolute build path as the
 # package origin; a copied one records feeds/wrthotspot/... like official feeds.
-cp feeds.conf.default feeds.conf
-echo "src-cpy wrthotspot $REPO/feed" >> feeds.conf
+# Other lines of an existing feeds.conf (feeds a developer added) are kept.
+[ -f feeds.conf ] || cp feeds.conf.default feeds.conf
+grep -v '^src-[a-z]* wrthotspot ' feeds.conf > feeds.conf.new
+echo "src-cpy wrthotspot $REPO/feed" >> feeds.conf.new
+mv feeds.conf.new feeds.conf
 
 echo "== feeds"
 rm -rf feeds/wrthotspot	# fresh copy: files removed from the repo must not linger
