@@ -54,8 +54,9 @@ emulated MIPS (big-endian, 128 MB) and ARM routers in QEMU (`tests/emu/`); physi
   window, and download/upload/transfer/uptime quotas per hourly/daily/weekly/monthly period. Logins outside
   every window are refused and sessions end when the window closes.
 - `wrthotspot` CLI: `setup <network>` wizard (zone, rules, DHCP/RA, offload off, server), `cert`, `cookies`, …
-- Capacity tiers: from its RAM and flash the router knows how many sessions and user accounts it can
-  carry while keeping a free-memory buffer (modes safe / balanced / max). Logins beyond the limit are
+- Capacity tiers: from its RAM, flash and conntrack table the router knows how many sessions and user
+  accounts it can carry while keeping a free-memory buffer (modes safe / balanced / max); a 64 MB
+  router gets about 55 / 170 / 260 sessions, never fewer than 10. Logins beyond the limit are
   refused ("the hotspot is full") unless `capacity_override` is set; adding users beyond it needs an
   admin to confirm a warning. Manual `max_sessions` / `max_users` override the computed values.
 - Third-party RADIUS / billing: presets for MikroTik-style servers (SAS4, Radius Manager, Splynx,

@@ -325,6 +325,8 @@ export function load(confdir) {
 			max_users: count(g.max_users),
 			// Allow logins beyond max_sessions (logged as warnings).
 			capacity_override: to_bool(g.capacity_override ?? '0'),
+			// Concurrent portal requests (uhttpd -n); 0 = by RAM (capacity.uc).
+			portal_max_requests: count(g.portal_max_requests),
 			// How RADIUS requests look (RADIUS_PRESETS above): mikrotik, coova or generic.
 			radius_preset: radius_preset(g.radius_preset ?? 'mikrotik'),
 			// RouterOS API subset for MikroTik billing systems (wrt-hotspot-radius).

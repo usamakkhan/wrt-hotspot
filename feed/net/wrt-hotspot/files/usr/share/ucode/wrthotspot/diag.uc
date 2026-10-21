@@ -173,10 +173,12 @@ export function run_checks(cfg, state) {
 	let cp = state?.capacity;
 	if (cp && cp.mode != 'off') {
 		let over = cp.over_sessions || cp.over_users;
-		add('capacity', over ? 'warn' : 'ok',
-			sprintf('%s RAM tier, %s mode: %d/%d sessions, %d/%d user accounts%s', cp.tier?.label ?? '?', cp.mode,
+		add('capacity', (over || cp.low_memory || cp.low_flash) ? 'warn' : 'ok',
+			sprintf('%s RAM tier, %s mode: %d/%d sessions, %d/%d user accounts%s%s%s', cp.tier?.label ?? '?', cp.mode,
 				cp.sessions, cp.max_sessions, cp.users, cp.max_users,
-				over ? ' - above the recommended capacity' : ''));
+				over ? ' - above the recommended capacity' : '',
+				cp.low_memory ? ' - little free memory, the minimum is allowed (balanced or max mode fits more)' : '',
+				cp.low_flash ? ' - little free flash for user accounts' : ''));
 	}
 
 	// Kernel tables that bound how many clients the router can carry.

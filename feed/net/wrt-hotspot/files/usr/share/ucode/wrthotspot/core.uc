@@ -124,6 +124,8 @@ export function create(opts) {
 	let last_resync = 0;
 	let cap = null;			// capacity limits (capacity.uc); 0 = unlimited
 	let cap_warned = 0;
+	let mem_samples = [];		// [ MemAvailable, sessions, users, time ], last 10 minutes
+	let last_mem_sample = 0;
 	let last_rates = 0;
 	let try_mac_cookie;		// defined below, used by self.client
 	let auto_login;
@@ -448,7 +450,8 @@ export function create(opts) {
 		return int(f[3]);
 	}
 
-	function setup_capacity() {
+	// quiet: periodic refresh, log only when the limits change.
+	function setup_capacity(quiet) {
 		let g = cfg.global;
 
 		if (g.capacity == 'off') {
@@ -456,25 +459,62 @@ export function create(opts) {
 			return;
 		}
 
+		let n_sessions = length(keys(sessions));
+		let n_users = users ? users.count() : 0;
+		let shaped = shp != null && shp != 'nft';
+
+		// Free memory dips for a moment while the daemon reloads or a package
+		// is installed. The best of the samples of the last 10 minutes (one a
+		// minute, each with what the hotspot used then added back) keeps the
+		// limits steady and still follows real changes within minutes. They
+		// are kept in the state dir (RAM), so a daemon restart keeps them too.
+		let now = time();
+
+		if (!length(mem_samples))
+			mem_samples = filter(read_json(state_path('mem-samples.json')) ?? [], (m) => type(m) == 'array' && length(m) == 4);
+
+		push(mem_samples, [ meminfo_kb('MemAvailable'), n_sessions, n_users, now ]);
+		mem_samples = filter(mem_samples, (m) => now - m[3] < 600 && m[3] <= now);
+		if (length(mem_samples) > 20)
+			mem_samples = slice(mem_samples, -20);
+		write_atomic(state_path('mem-samples.json'), sprintf('%J', mem_samples));
+
+		let per = capacity.session_cost(shaped, g.capacity_mode);
+		let in_use = (s, u) => s * per + u * capacity.COST.user;
+		let best = 0;
+
+		for (let m in mem_samples)
+			best = max(best, m[0] + in_use(m[1], m[2]));
+
+		let prev = cap;
+
 		cap = capacity.compute({
 			mem_total_kb: meminfo_kb('MemTotal'),
-			mem_avail_kb: meminfo_kb('MemAvailable'),
+			mem_avail_kb: best - in_use(n_sessions, n_users),
 			flash_free_kb: db_flash_free_kb(),
-			shaped: shp != null && shp != 'nft',
+			shaped,
 			mode: g.capacity_mode,
-			sessions: length(keys(sessions)),
-			users: users ? users.count() : 0,
+			conntrack_max: int(trim(fs.readfile('/proc/sys/net/netfilter/nf_conntrack_max') ?? '0')),
+			portal_workers: g.portal_max_requests,
+			sessions: n_sessions,
+			users: n_users,
 			max_sessions: g.max_sessions,
 			max_users: g.max_users,
 		});
+
+		if (quiet && prev && prev.max_sessions == cap.max_sessions && prev.max_users == cap.max_users && prev.low_memory == cap.low_memory)
+			return;
 
 		log('info', 'Capacity: %s RAM tier, %s mode: up to %d sessions and %d user accounts%s',
 			cap.tier.label, cap.mode, cap.max_sessions, cap.max_users,
 			g.capacity_override ? ' (override: logins beyond the limit are allowed)' : '');
 
-		if (cap.exhausted && !(g.max_sessions > 0) && !g.capacity_override)
-			log('warn', 'Capacity: free memory (%d KiB) is below the %s-mode reserve (%d KiB), so only 1 session is allowed: free memory, use capacity_mode balanced or max, or set max_sessions / capacity_override',
-				meminfo_kb('MemAvailable'), cap.mode, cap.reserve_kb);
+		if (cap.low_memory && !(g.max_sessions > 0))
+			log('warn', 'Capacity: little free memory (%d KiB, %s-mode reserve %d KiB): allowing the minimum of %d sessions. More fit with capacity_mode balanced or max, fewer services/packages, or a manual max_sessions',
+				meminfo_kb('MemAvailable'), cap.mode, cap.reserve_kb, cap.max_sessions);
+
+		if (cap.low_flash && !(g.max_users > 0))
+			log('warn', 'Capacity: little free flash for the user database: %d user accounts', cap.max_users);
 	}
 
 	self.capacity = function() {
@@ -1940,6 +1980,12 @@ export function create(opts) {
 		if (now - last_resync >= 30) {
 			last_resync = now;
 			hosts.resync();
+		}
+
+		// Capacity follows the free memory (smoothed, see setup_capacity).
+		if (now - last_mem_sample >= 60) {
+			last_mem_sample = now;
+			setup_capacity(true);
 		}
 
 		// Interfaces re-created by netifd lose their qdiscs: rebuild then.

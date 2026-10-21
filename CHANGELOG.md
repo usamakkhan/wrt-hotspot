@@ -14,7 +14,15 @@
 ### Fixes (found on emulated MIPS and ARM routers)
 
 - **OpenWrt 24.10: RADIUS, CoA and the RouterOS API did not work.** Their sockets were bound with a `[::]:port` address string, which ucode-mod-socket on 24.10 cannot parse, so no RADIUS request was ever sent and nothing listened on 3799 or 8728. Addresses are now passed as objects, which both releases accept.
-- **A router already short of memory got no session limit at all.** When the free memory was below the capacity reserve, the computed limit was 0, which means "unlimited". Such a router now gets a limit of 1 (raise it with `capacity_mode`, `max_sessions` or `capacity_override`), and the daemon logs a warning saying why.
+- **A router already short of memory got no session limit at all.** When the free memory was below the capacity reserve, the computed limit was 0, which means "unlimited". It now never goes below the minimum described next.
+
+### Small routers
+
+- **Capacity limits fit 64 MB routers.** The old model charged connection tracking to every session (96 KiB each) on top of a 16 MB reserve, so a 64 MB router got 1 session and 1 user account. Memory that all clients share and the kernel bounds anyway (the conntrack table, the portal workers) is now set aside once. A 64 MB router gets about 55 sessions in safe mode, 170 in balanced and 260 in max. At least 10 sessions and 100 accounts are always allowed, with a warning when memory is that short.
+- Sessions are also capped by the conntrack table (48 / 24 / 12 connections per client by mode), so a crowd cannot fill it and break everyone's connections.
+- Free memory is sampled every minute and the best of the last 10 samples counts: the limits stay steady through reloads and package installs.
+- `portal_max_requests` defaults to 8 workers up to 64 MB of RAM, 16 up to 128 MB, 32 above (was 32 everywhere, up to 13 MB in a burst of new clients).
+- LuCI, `wrthotspot status` and diagnostics say when the minimum applies, when the conntrack table limits, and when flash is short.
 
 ### Tests
 

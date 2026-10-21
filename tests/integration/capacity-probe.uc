@@ -81,7 +81,10 @@ function revoke() {
 			hs('voucher_revoke', { batch: b.batch, all: true });
 }
 
-sh("uci set wrthotspot.capfree=user_profile; uci set wrthotspot.capfree.shared_users=1; uci set wrthotspot.capshaped=user_profile; uci set wrthotspot.capshaped.shared_users=1; uci set wrthotspot.capshaped.rate_limit='2M/10M'; uci commit wrthotspot");
+// The probe measures, it must not be stopped by the limits it calibrates
+// (N vouchers at once exceed a small router's account limit).
+let old_capacity = sh('uci -q get wrthotspot.global.capacity');
+sh("uci set wrthotspot.global.capacity=off; uci set wrthotspot.capfree=user_profile; uci set wrthotspot.capfree.shared_users=1; uci set wrthotspot.capshaped=user_profile; uci set wrthotspot.capshaped.shared_users=1; uci set wrthotspot.capshaped.rate_limit='2M/10M'; uci commit wrthotspot");
 hs('reload');
 sleep(2000);
 
@@ -117,5 +120,7 @@ revoke();
 
 neigh('del');
 sh('uci -q delete wrthotspot.capfree; uci -q delete wrthotspot.capshaped; uci commit wrthotspot');
+sh(old_capacity ? `uci set wrthotspot.global.capacity='${old_capacity}'; uci commit wrthotspot`
+	: 'uci -q delete wrthotspot.global.capacity; uci commit wrthotspot');
 hs('reload');
 printf('  cleanup: sessions %d, users %d\n', hs('status').sessions, hs('status').users);

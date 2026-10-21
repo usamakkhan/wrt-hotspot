@@ -7,7 +7,7 @@ USE_PROCD=1
 PORTAL_DIR=/usr/share/wrthotspot
 
 start_service() {
-	local enabled port https_port cert key max_requests
+	local enabled port https_port cert key max_requests mem_kb
 
 	config_load wrthotspot
 	config_get_bool enabled global enabled 1
@@ -16,7 +16,16 @@ start_service() {
 	config_get cert global ssl_certificate
 	config_get key global ssl_key
 	# Each concurrent portal request is a forked uhttpd worker (~0.4 MB).
-	config_get max_requests global portal_max_requests 32
+	# Default by RAM: 8 up to 64 MB, 16 up to 128 MB, else 32 (capacity.uc
+	# portal_workers() counts the same number into its reserve).
+	config_get max_requests global portal_max_requests
+	if [ -z "$max_requests" ]; then
+		mem_kb=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
+		mem_kb=${mem_kb:-999999}
+		if [ "$mem_kb" -le 70000 ]; then max_requests=8
+		elif [ "$mem_kb" -le 140000 ]; then max_requests=16
+		else max_requests=32; fi
+	fi
 
 	if [ "$enabled" != 1 ]; then
 		# Disabled: open the network again by removing our table and shapers.

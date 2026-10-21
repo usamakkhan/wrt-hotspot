@@ -3,7 +3,8 @@ config global 'global'
 	# Seconds between counter reads / timeout checks.
 	option poll_interval '10s'
 	option portal_port '8002'
-	# Concurrent portal requests (each a ~0.4 MB worker); 8-16 on 64 MB routers.
+	# Concurrent portal requests (each a ~0.4 MB worker). Default by RAM:
+	# 8 up to 64 MB, 16 up to 128 MB, 32 above.
 	#option portal_max_requests '32'
 	# HTTPS portal (login_by https, RFC 8908/8910). `wrthotspot cert <name>`
 	# creates a self-signed pair; use a real certificate in production.
@@ -31,8 +32,10 @@ config global 'global'
 	# Root rate of the HTB trees; keep it above the real link speed.
 	option shaper_capacity '10G'
 	# How many sessions / local user accounts this router may carry, from its
-	# RAM and flash: auto or off. Modes: safe (largest free-memory buffer),
-	# balanced, max. Manual max_sessions / max_users replace the computed values.
+	# RAM, flash and conntrack table: auto or off. Modes: safe (largest
+	# free-memory buffer), balanced, max. At least 10 sessions and 100
+	# accounts are always allowed. Manual max_sessions / max_users replace the
+	# computed values.
 	option capacity 'auto'
 	option capacity_mode 'safe'
 	#option max_sessions '200'

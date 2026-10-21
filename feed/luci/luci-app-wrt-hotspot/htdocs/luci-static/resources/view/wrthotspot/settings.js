@@ -48,9 +48,9 @@ return view.extend({
 		o.default = 'info';
 
 		o = s.taboption('general', form.Value, 'portal_max_requests', _('Concurrent portal requests'),
-			_('Each one is a worker of about 0.4 MB. 8-16 on 64 MB routers.'));
+			_('Each one is a worker of about 0.4 MB. Empty = by RAM: 8 up to 64 MB, 16 up to 128 MB, 32 above.'));
 		o.datatype = 'range(2,256)';
-		o.placeholder = '32';
+		o.placeholder = cap.portal_workers ? String(cap.portal_workers) : _('automatic');
 
 		/* Capacity */
 
@@ -65,10 +65,18 @@ return view.extend({
 			var warn = (cap.over_sessions || cap.over_users)
 				? ' <strong style="color:#c00">' + _('above the recommended capacity') + '</strong>' : '';
 
+			var why = '';
+			if (cap.low_memory)
+				why = '<br><strong>' + _('Little free memory: the minimum of %d sessions is allowed. The balanced or max mode fits more.').format(cap.auto_sessions) + '</strong>';
+			else if (cap.limited_by == 'conntrack')
+				why = '<br><small>' + _('Sessions limited by the connection tracking table (%d entries).').format(cap.conntrack_max) + '</small>';
+			if (cap.low_flash)
+				why += '<br><strong>' + _('Little free flash for the user database.') + '</strong>';
+
 			return _('%s RAM tier, %s mode: %d / %d sessions, %d / %d user accounts.').format(
 				(cap.tier || {}).label || '?', cap.mode, cap.sessions, cap.max_sessions, cap.users, cap.max_users) + warn +
 				'<br><small>' + _('Reserve %s kept free, about %s per session.').format(
-					hs.fmtBytes((cap.reserve_kb || 0) * 1024), hs.fmtBytes((cap.session_cost_kb || 0) * 1024)) + '</small>';
+					hs.fmtBytes((cap.reserve_kb || 0) * 1024), hs.fmtBytes((cap.session_cost_kb || 0) * 1024)) + '</small>' + why;
 		};
 
 		o = s.taboption('capacity', form.ListValue, 'capacity', _('Capacity limits'),

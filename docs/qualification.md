@@ -111,23 +111,33 @@ that used to be here. Costs measured with `tests/integration/capacity-probe.uc 1
 | session, nft policing / no limit | 18 KiB | 8 KiB |
 | session, tc HTB shaping | 37 KiB | 3 KiB |
 
-Model: budget = available memory at start + what the hotspot already uses − reserve; 85% of it goes
-to sessions, 15% to accounts, and accounts are also limited to half of the free flash.
+Model (revised 2026-10-21 for small routers): budget = available memory + what the hotspot already
+uses − reserve; 85% of it goes to sessions, 15% to accounts, and accounts are also limited to half of
+the free flash. Free memory is sampled once a minute and the best of the last 10 samples counts, so a
+moment of churn (a reload, a package install) does not shrink the limits.
 
-| Mode | Reserve kept free | Traffic allowance per session | Shaped session counted as |
-|---|---|---|---|
-| safe (default) | 30% of RAM, at least 16 MB | 96 KiB | 141 KiB |
-| balanced | 20%, at least 12 MB | 48 KiB | 93 KiB |
-| max | 12%, at least 8 MB | 16 KiB | 61 KiB |
+The reserve is a base buffer plus the memory that all clients share and that is bounded anyway:
+the kernel's conntrack table (`nf_conntrack_max` × 0.32 KiB) and the portal workers
+(`portal_max_requests` × 0.4 MB). Earlier versions charged connection tracking to every session
+(96 KiB each in safe mode) on top of a 16 MB floor, which left a 64 MB router with no budget at all.
 
-The traffic allowance covers what a busy client adds outside the hotspot (conntrack entries, socket
-and queue memory). What that gives (shaped, typical free memory after boot):
+| Mode | Base kept free | Share of conntrack + workers | Traffic allowance per session | Flows per session (cap) |
+|---|---|---|---|---|
+| safe (default) | 8% of RAM, at least 4 MB | all | 16 KiB | 48 |
+| balanced | 5%, at least 3 MB | half | 8 KiB | 24 |
+| max | 3%, at least 2 MB | a quarter | 4 KiB | 12 |
+
+Sessions are also capped at `nf_conntrack_max` / flows per session: beyond that the kernel drops new
+connections for everyone. At least 10 sessions and 100 accounts are always allowed (with a warning
+when memory is that short), and `portal_max_requests` defaults to 8 / 16 / 32 workers for up to
+64 MB / 128 MB / more RAM. What that gives:
 
 | Router | RAM / free | safe | balanced | max |
 |---|---|---|---|---|
-| 64 MB MIPS | 59 / 25 MB | 44 sessions | 116 | 234 |
-| 128 MB MT7621 / IPQ40xx | 123 / 75 MB | 229 | 460 | 839 |
-| test VM | 236 / 140 MB | 415 | 846 | 1554 (2000 measured working without traffic) |
+| 64 MB armv7 (emulated, measured) | 52 / 12–15 MB, conntrack 7168 | 55 sessions | 169 | 262 |
+| 64 MB, more free | 59 / 14 MB | 78 | 210 | 310 |
+| 128 MB MT7621 / IPQ40xx, shaped | 123 / 75 MB, conntrack 15360 | 320 (conntrack) | 640 (conntrack) | 1187 |
+| test VM, shaped | 236 / 140 MB, conntrack 65536 | 1216 | 1784 | 2158 (2000 measured working without traffic) |
 
 Logins beyond the limit are refused with "the hotspot is full", unless `capacity_override` is set;
 user accounts beyond it need an admin to confirm (LuCI, panel, `force=1` in the CLI). Status,
@@ -137,7 +147,8 @@ The poll cycle grows linearly (~0.3 ms per session on the VM); expect 3–5× th
 `poll_interval` at its 10 s default (or raise it) above ~500 sessions.
 
 Portal bursts: every unauthenticated device's captive probes reach the portal, so a crowd arriving at
-once (a lecture hall, a bus) costs `portal_max_requests` × ~0.4 MB at peak; lower it on small routers.
+once (a lecture hall, a bus) costs `portal_max_requests` × ~0.4 MB at peak. That is why the default
+scales with RAM; requests beyond it wait in uhttpd's queue instead of costing memory.
 
 Logging: every login/logout is logged at `info`. With hundreds of logins a minute the default 64 KiB
 logread ring wraps quickly — use remote syslog or raise `log_size` on busy sites.
