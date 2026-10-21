@@ -181,6 +181,8 @@ setup() {
 	cp "$(dirname "$0")/../../feed/net/wrt-hotspot/files/etc/config/wrthotspot" /etc/config/wrthotspot
 	# Emulated routers keep their root in RAM and need a looser capacity mode.
 	[ -n "$HS_CAPACITY_MODE" ] && uci set wrthotspot.global.capacity_mode="$HS_CAPACITY_MODE"
+	# Checks tc HTB, burst and conntrack behaviour: lite mode (lite-test.sh) off.
+	uci set wrthotspot.global.lite=0
 
 	uci set network.br_hstest=device
 	uci set network.br_hstest.type=bridge
