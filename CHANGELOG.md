@@ -1,107 +1,64 @@
 # Changelog
 
-## 0.9.0 — 2026-10-21
+This file records released changes. For installation, see the [README](README.md); for test environments and measurements, see [qualification](docs/qualification.md).
 
-Custom login pages, small and slow routers, and an important fix for OpenWrt 24.10: RADIUS, CoA and the RouterOS API did not work there at all. Upgrading is recommended for everyone, and urgent for 24.10 routers that use RADIUS.
+## 0.9.0 - 2026-10-21
 
-Feeds: every feed URL serves 0.9.0, including the versioned v0.8.0 and v0.8.1 ones, so `apk upgrade` / `opkg upgrade` is all a router needs.
+**Upgrade guidance:** OpenWrt 24.10 users of RADIUS, CoA or the RouterOS API should upgrade. Earlier socket binding did not work with that release's ucode socket module. The release feed is also copied to older versioned feed URLs so routers already using those URLs can upgrade.
 
-### Custom login pages
+### Added
 
-- **Login Pages** in LuCI: upload a zip of hotspot pages, download any page set as a zip, pick a set for a server profile, remove uploaded sets. The browser unpacks the zip, so the router needs no `unzip`. The router checks names, file types and sizes, keeps enough flash free, and installs a set only after the whole upload passed. Uploaded sets live in `/etc/wrthotspot/pages/` and survive a sysupgrade.
-- New built-in page set `classic`, laid out like RouterOS's stock hotspot page, with the OpenWrt logo, links to the project, three colour themes and a README of all page variables. **Download sample** in LuCI gives it as a zip to start from.
-- MikroTik page sets now really work unmodified:
-  - quoted comparisons (`$(if trial == 'yes')`, `$(if error == "")`) were compared with the quotes and never matched;
-  - the stock trial link (`username=T-$(mac-esc)`) starts a trial.
-- The portal serves `.webp` and `.woff` files. CSS, images and scripts are cached for 2 minutes and then revalidated (ETag) instead of cached for an hour, so a replaced page set shows within 2 minutes.
+- LuCI Login Pages management: upload a ZIP, download a page set, assign it to a server profile and remove uploaded sets. The router validates paths, file types, sizes and available flash before installation. Uploaded sets live in `/etc/wrthotspot/pages/` and survive sysupgrade.
+- Built-in `classic` sample page set with an OpenWrt logo, three themes and a README of page variables.
+- Capacity limits adapted for small routers, with safe, balanced and max modes and a conntrack-based cap.
+- Portal worker defaults scale with RAM: 8 concurrent requests up to 64 MB, 16 up to 128 MB and 32 above that. Free memory is sampled over a rolling window so brief package installs or reloads do not abruptly shrink capacity.
+- Lite mode for routers with limited RAM. It uses nftables policing and fewer processes per login and logout, with the [documented tradeoffs](docs/qualification.md#lite-mode).
+- QEMU test workflow for OpenWrt MIPS and ARM images.
+- Release publishing check that downloads feed indexes after publication to verify versioned URLs.
 
-### Fixes (found on emulated MIPS and ARM routers)
+### Fixed
 
-- **OpenWrt 24.10: RADIUS, CoA and the RouterOS API did not work.** Their sockets were bound with a `[::]:port` address string, which ucode-mod-socket on 24.10 cannot parse, so no RADIUS request was ever sent and nothing listened on 3799 or 8728. Addresses are now passed as objects, which both releases accept.
-- **A router already short of memory got no session limit at all.** When the free memory was below the capacity reserve, the computed limit was 0, which means "unlimited". It now never goes below the minimum described next.
+- RADIUS, CoA and RouterOS API socket addresses on OpenWrt 24.10.
+- A zero computed capacity that was treated as unlimited when free memory fell below the reserve.
+- Quoted comparisons in MikroTik-style page templates and the stock `T-` trial link.
+- Slow portal rendering on emulated MIPS by reducing regular-expression and per-request configuration work.
+- Portal static files now use short caching with ETag revalidation, making an uploaded page-set replacement visible sooner.
+- Package metadata leaking the build host path by building from a copied feed.
+- Missing signing keys now fail the build unless new keys are explicitly requested with `WRTHOTSPOT_NEW_KEYS=1`.
 
-### Small routers
+### Verified
 
-- **Capacity limits fit 64 MB routers.** The old model charged connection tracking to every session (96 KiB each) on top of a 16 MB reserve, so a 64 MB router got 1 session and 1 user account. Memory that all clients share and the kernel bounds anyway (the conntrack table, the portal workers) is now set aside once. A 64 MB router gets about 55 sessions in safe mode, 170 in balanced and 260 in max. At least 10 sessions and 100 accounts are always allowed, with a warning when memory is that short.
-- Sessions are also capped by the conntrack table (48 / 24 / 12 connections per client by mode), so a crowd cannot fill it and break everyone's connections.
-- Free memory is sampled every minute and the best of the last 10 samples counts: the limits stay steady through reloads and package installs.
-- `portal_max_requests` defaults to 8 workers up to 64 MB of RAM, 16 up to 128 MB, 32 above (was 32 everywhere, up to 13 MB in a burst of new clients).
-- LuCI, `wrthotspot status` and diagnostics say when the minimum applies, when the conntrack table limits, and when flash is short.
-- **Lite mode for slow routers** (`option lite`, automatic up to 64 MB of RAM, switch in LuCI → Settings): a login and a logout each start one process instead of up to four and six. Rate limits use nftables policing instead of tc HTB (no burst, priority or fair queuing), the last check interval of traffic before a logout is not counted, and connections of logged-out clients expire on their own. Logouts were about 3× faster on an emulated 64 MB router.
-- With nftables policing (lite or not), a login's rate limit goes into the same `nft` batch as the session: one process less per login.
-- **Faster portal on slow CPUs.** On a MIPS 24Kc the login page takes 122 ms instead of 169 ms and a CSS or image file 82 ms instead of 115 ms; rendering the pages is almost 4× faster. Regular expressions are slow in ucode on such CPUs, so the template engine and the per-request helpers now use string functions only, and the portal gets its settings from hotspotd instead of parsing the whole configuration on every request. Pages render exactly as before.
+Unit and integration suites ran on emulated big-endian MIPS and ARM images, including OpenWrt 24.10 and 25.12. See the [QEMU results](docs/qualification.md#emulated-router-results).
 
-### Tests
+## 0.8.1 - 2026-10-20
 
-- `tests/emu/emu.sh` boots OpenWrt in QEMU (MIPS 24Kc big-endian with 128 MB on 25.12 and 24.10, ARM Cortex-A53), installs the release feed as the README says, and runs every suite there. See [docs/qualification.md](docs/qualification.md#emulated-routers-qemu).
-- The netns test brings its own minimal FreeRADIUS site, so it needs only the files, pap, chap and detail modules.
-- Fewer fixed sleeps in the tests: the regression test waits for the daemon after a restart, and the CoA check polls.
-- Package builds copy the feed (`src-cpy`), so package metadata no longer shows the build machine's path.
-
-### Releases
-
-- `scripts/publish-release.sh` publishes a release and copies its feed into every older release, then downloads the indexes from each feed URL to confirm they serve the new version: no router is left on an old feed.
-- The build never creates new signing keys silently: a missing key is an error unless `WRTHOTSPOT_NEW_KEYS=1` (CI uses throwaway keys that way).
-
-## 0.8.1 — 2026-10-20
-
-Bug-fix release from a full review of 0.8.0. Upgrading is recommended for everyone.
-
-Feeds: the README now installs from `releases/latest/download/`, which always serves the newest release. The v0.8.0 feed URL also serves 0.8.1, so routers set up with it upgrade with a plain `apk upgrade` / `opkg upgrade`.
+A security and reliability update to 0.8.0. The latest-release feed URL was added, and the v0.8.0 feed URL was refreshed for existing routers.
 
 ### Security
 
-- **Portal:** `dst=` only accepts plain `http(s)://` addresses, so a crafted `javascript:` link can no longer run script on the portal. CR/LF can no longer reach a response header, which blocked response splitting.
-- **Portal:** another website can no longer log a device in (login CSRF) or out (logout CSRF). Captive-portal assistants, which send no Origin or Referer, still work.
-- **LuCI:** user names, comments, RADIUS values and diagnostics are escaped. An operator could previously plant script that ran when an admin opened LuCI.
-- **RouterOS API:**
-  - pipelined password guesses stop at the first refused login;
-  - an address that fails 5 times is blocked for a minute;
-  - a malformed `api_allow` entry no longer matches every address.
-- **RADIUS CoA/Disconnect:**
-  - a request with an Event-Timestamp more than 5 minutes off is dropped;
-  - a retransmission gets the cached answer and is not applied twice;
-  - an unparsable Calling-Station-Id is refused instead of matching all of the user's sessions.
-- **Operators:** changing an operator's role or password, or removing them, now ends their open sessions.
-- **Panel CSV exports** no longer allow formula injection.
+- Restricted portal `dst=` to HTTP(S) URLs and prevented CR/LF in response headers.
+- Added login and logout CSRF checks while allowing captive assistants without Origin or Referer.
+- Escaped untrusted values rendered in LuCI and blocked formula injection in panel CSV exports.
+- Stopped pipelined RouterOS API password guessing at the first failed login, limited repeated attempts and corrected malformed `api_allow` handling.
+- Added CoA timestamp and retransmission checks and rejected malformed Calling-Station-Id values.
+- Ended operator sessions after role, password or account changes.
 
-### Fixes
+### Reliability and behavior
 
-- Without `wrt-hotspot-radius`, logins crashed and logouts repeated on every poll, and MAC authentication could stop the daemon.
-- The first shaped user after a daemon start got the HTB root class, which capped the whole interface at that user's rate. tc class, filter and leaf IDs are now kept apart. The session slot limit is 65519.
-- A config value nftables refuses no longer leaves the network open at boot: a minimal captive ruleset is loaded instead. Port ranges, global ports and `dns_name` are now validated. Overlapping bypass/block networks load (`auto-merge`).
-- A failed ruleset load no longer counts traffic twice.
-- Limits:
-  - logging in again no longer resets a used-up data or time limit;
-  - repeating a trial no longer doubles it;
-  - a trial can no longer replace a paid session.
-- A cookie or MAC-cookie login of a RADIUS user now gets only what is left of the original grant, instead of the full Session-Timeout and data limit again.
-- A failed login no longer ends the device's working session, and a new session is never left out of a fallback rebuild.
-- RADIUS:
-  - accounting can no longer use up all request IDs (which made every login fail while an accounting server was down);
-  - the backlog is sent 32 at a time;
-  - passwords are capped at the RFC 2865 limit of 128 bytes.
-- `voucher_revoke` without a batch deleted ordinary users. A batch is now required.
-- RouterOS API: host and cookie IDs are stable, and connection resets no longer leak slots.
-- The daemon survives an exception in any timer, listener or neighbour callback, and ignores SIGPIPE.
-- `wrthotspot setup` follows changes to `portal_port` and `https_port` and opens the port of a local transparent proxy. A disabled service stops announcing the portal in DHCP and RA.
-- A quota typo is reported instead of meaning "unlimited", and an invalid rate-limit priority is rejected.
-- Logged-out flows are dropped from conntrack when `conntrack-tools` is installed.
-- Usernames starting with `T-` can log in normally.
-- Panel:
-  - days follow the router's time zone, so "today" is no longer yesterday east of UTC;
-  - double clicks no longer create two batches;
-  - the session lasts an hour and logout really ends it;
-  - Extend works for accounts without an end date;
-  - a profile missing from the list is no longer replaced on save.
-- LuCI and panel forms refuse IP-binding and walled-garden entries the daemon would ignore, and newer searches are never overwritten by older ones.
+- Fixed login and polling failures when the optional RADIUS package was absent.
+- Limited accounting backlog delivery so a disconnected RADIUS server could not exhaust request IDs and block new logins.
+- Corrected tc identifiers so the first shaped user could not cap an entire interface.
+- Loaded a minimal captive ruleset if a configured nftables value was rejected.
+- Preserved consumed limits across repeat logins and trials; prevented trial login from replacing a paid session.
+- Prevented RADIUS cookie logins from resetting the original authorization grant.
+- Made failed logins leave an existing working session intact and avoided duplicate sessions during restore.
+- Improved RADIUS accounting backlog delivery and enforced the RFC 2865 password limit.
+- Required a batch identifier when revoking vouchers so ordinary users could not be deleted.
+- Made RouterOS API host and cookie identifiers stable and cleaned up reset connections.
+- Updated setup rules when portal or proxy ports change and stopped captive announcements when disabled.
+- Fixed panel time-zone grouping, duplicate batch creation, session expiration and several edit-form cases.
+- Added regression coverage for the reproducible fixes.
 
-### Tests
+## 0.8.0 - 2026-10-19
 
-- New `tests/integration/regression-test.sh`, with a check for each reproducible bug above.
-- RouterOS API test: pipelined login guessing.
-- CI: package builds work (the scripts lacked the executable bit), lint now catches that, and actions are updated.
-
-## 0.8.0 — 2026-10-19
-
-- Optional RADIUS package, capacity tiers, third-party RADIUS presets and RouterOS API, transparent HTTP proxy, signed package feeds. See the [release notes](https://github.com/usamakkhan/wrt-hotspot/releases/tag/v0.8.0).
+Added the optional RADIUS package, capacity tiers, third-party billing presets, a RouterOS API subset, transparent HTTP proxy support, signed feeds, upgrade tests and the translation template. See the [release notes](https://github.com/usamakkhan/wrt-hotspot/releases/tag/v0.8.0).

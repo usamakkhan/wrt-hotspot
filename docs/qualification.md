@@ -1,249 +1,112 @@
-# Qualification (Phase 7)
+# Qualification and benchmarks
 
-Status 2026-10-18, version 0.7.0. No physical routers were available, so everything below was measured on the
-x86-64 test VM (OpenWrt 25.12.5, 236 MB RAM, 1 vCPU). The MIPS/ARM rows stay open until hardware is
-at hand; the packages themselves are architecture independent (ucode, JS, HTML).
+This report separates tested results from estimates. Version 0.7.0 supplied the original x86 load measurements; the integration suites were expanded through 0.8.1, and version 0.9.0 was run on emulated MIPS and ARM routers. There are no physical-router or real Wi-Fi client results yet.
 
-## Packages
+## Test environments
 
-`scripts/build-packages.sh <release>` builds every package with the official x86-64 SDK of that
-release and copies them to `dist/<release>/`. The packages are `PKGARCH:=all`, so the same files
-install on every target of the release. Only the luci-base host tools are compiled besides our own
-packages (`NO_DEPS=1`): runtime dependencies such as tc-full or luci-base come from the router's
-package feeds.
+| Environment | OpenWrt | Resources | Purpose |
+|---|---|---|---|
+| x86 VM | 25.12.5 | 236 MB RAM, one vCPU | Functional, traffic and 2,000-session tests |
+| QEMU malta, big-endian MIPS 24Kc | 25.12.6 and 24.10.8 | 128 MB RAM | Package install and integration suites |
+| QEMU ARM Cortex-A53 | 25.12.6 | 256 MB RAM, two cores | Package install and integration suites |
+| QEMU ARM Cortex-A15 | 25.12.6 | 64 MB for lite-mode measurements | Selected suites and small-router behavior |
 
-| Release | Format | Result |
-|---|---|---|
-| 24.10.8 | ipk | 4 packages, ~1 min with a warm SDK |
-| 25.12.6 | apk | 4 packages, ~1 min with a warm SDK; installed with `apk add` on the VM and every suite below re-run against the packaged files |
+QEMU uses OpenWrt images but does not reproduce switch chips, Wi-Fi drivers, flash wear or physical CPU speed. Measured timing in emulation should not be treated as physical-router performance.
 
-CI (`.github/workflows/ci.yml`) runs the unit tests inside the OpenWrt 24.10 and 25.12 rootfs images
-(the real ucode and nft of each release), lints shell/JSON/JS, and builds both package sets.
+The figures below come from different releases and workloads. A successful functional suite establishes behavior in its test topology; it does not establish throughput or capacity on a production router. No benchmark result in this report is a minimum hardware specification.
 
-## Test suites (on the VM, 0.8.1)
+## Package and functional tests
 
-| Suite | Result |
+The package build uses the official SDK for each release and produces architecture-independent packages. CI runs ucode unit tests, an nftables syntax check and package builds. The following are recorded x86 VM results from the 0.8.1 test cycle, unless noted otherwise:
+
+| Suite | Recorded result |
 |---|---|
-| `tests/run-unit.sh` (incl. capacity maths and `nft -c` of the generated ruleset) | all passed |
-| `tests/integration/netns-test.sh` (portal, IPv4/IPv6, walled garden, RADIUS + presets + ChilliSpot/Ascend, CoA, shaping, transparent proxy, RFC 8908/8910) | 154 / 154 |
-| `tests/integration/panel-api-test.sh` (operator roles, vouchers, history, reports, capacity force) | 53 / 53 |
-| `tests/integration/capacity-test.sh` (limits, admin force, override) | 16 / 16 |
-| `tests/integration/rosapi-test.uc` (RouterOS API, incl. pipelined login guessing) + `rosapi-librouteros.py` (independent client) | 34 / 34, 11 / 11 |
-| `tests/integration/upgrade-test.sh` (0.7.0 → 0.8.0 and 0.8.0 → 0.8.1 through the signed feed) | 16 / 16, 12 / 12 |
-| `tests/integration/regression-test.sh` (one check per bug fixed in 0.8.1) | 24 / 24 |
-| `tests/integration/traffic-test.sh 150` (below) | 9 / 9 |
-| `tests/integration/load-test.uc 2000` (capacity limits off for the run) | 2000 / 2000 logins |
+| Unit tests, including generated nftables syntax | passed |
+| Network namespace integration: portal, dual stack, walled garden, RADIUS, CoA, shaping and proxy | 154 / 154 |
+| Operator panel API | 53 / 53 |
+| Capacity | 16 / 16 |
+| RouterOS API and independent librouteros client | 34 / 34 and 11 / 11 |
+| Upgrade paths from 0.7.0 through 0.8.1 | 16 / 16 and 12 / 12 |
+| Regression checks for 0.8.1 fixes | 24 / 24 |
+| Real-traffic test with 150 clients | 9 / 9 |
+| Control-plane load test | 2,000 / 2,000 logins |
 
-## Real-traffic concurrency test
+These numbers describe the recorded suites, not a new test run for this documentation rewrite.
 
-`tests/integration/traffic-test.sh N [rate] [KiB]` (after `netns-test.sh keep`): N clients, each in
-its own network namespace with its own MAC, IPv4 and IPv6 address, plugged into the hotspot bridge.
-All of them at the same time are redirected, log in through the portal with a voucher (real HTTP
-POST through uhttpd), download 1 MiB over IPv4 and 1 MiB over IPv6 through the HTB shaper (profile
-`1M/4M`), and finally log out through the portal.
+## Real-traffic concurrency on x86
 
-| Clients | Redirect (all) | Login (all) | Result | Per-download rate (limit 4 Mbit/s) |
-|---|---|---|---|---|
-| 20 | < 1 s | 1 s | 9 / 9 | 3.6–3.8 Mbit/s |
-| 100 | 2 s | 5 s | 9 / 9 | 2.4–3.7 Mbit/s |
-| 150 | 5 s | 6 s | 9 / 9 | 1.2–3.4 Mbit/s (VM CPU is the limit: router, 150 clients and the "internet" share one vCPU) |
+`tests/integration/traffic-test.sh N [rate] [KiB]` gives each simulated client its own network namespace, MAC and IPv4/IPv6 addresses. Clients reach the portal, log in with vouchers, download 1 MiB over each IP family through the HTB shaper at a configured `1M/4M` rate, then log out. The reported rates are per-download observations, not aggregate capacity.
 
-Every session accounted at least the bytes delivered; the counters run ~13% above the payload
-(IP/TCP headers plus the retransmissions of packets the shaper dropped, which the forward hook
-counts before the shaper). No client ever exceeded its limit.
+| Clients | All redirected | All logged in | Per-download rate with 4 Mbit/s limit |
+|---|---|---|---|
+| 20 | under 1 s | 1 s | 3.6-3.8 Mbit/s |
+| 100 | 2 s | 5 s | 2.4-3.7 Mbit/s |
+| 150 | 5 s | 6 s | 1.2-3.4 Mbit/s |
 
-Above 150 clients the VM itself runs out of memory: each simulated client costs ~234 KiB of kernel
-memory (namespace + veth) plus its curl process, all inside the router's 236 MB. That's a limit of
-the test bed, not of the router (real clients bring their own RAM), but it surfaced two real issues:
+At 150 clients the one-vCPU VM runs the router, clients and simulated Internet side together; it is CPU-limited. Above 150 the test bed ran out of memory because the simulated clients and their curl processes lived inside the same VM. This does not establish a 150-client limit for a physical router.
 
-| Found with 200 clients | Fix |
+The forwarding counters recorded at least the bytes delivered. They were about 13% above application payload in this test because they include packet headers and retransmissions before the shaper. This matters when comparing a data quota to an application-level download size.
+
+## Control-plane load on x86
+
+The packaged 0.7.0 build was tested with 2,000 neighbor entries and voucher logins on the 236 MB VM. This was a control-plane test; it did not generate full traffic from 2,000 clients.
+
+| Metric | Recorded result |
 |---|---|
-| The OOM killer picked `hotspotd` (largest process), dropping the sessions of the last second | `hotspotd` sets `oom_score_adj -500`: a portal worker or a tool goes first; verified, the daemon now survives and only workers are killed |
-| Each concurrent portal request is a forked uhttpd worker (~0.4 MB) | bounded by `-n`, now the `portal_max_requests` option (default 32 ≈ 12 MB peak; 8–16 on 64 MB routers) |
+| Logins | 2,000 successful, 57/s sequential, p50 14 ms, p95 20 ms |
+| Poll with 2,000 sessions | 0.64 s, maximum 0.93 s, every 10 s |
+| Daemon RSS | 39 MB |
+| Free memory remaining | about 36 MB |
+| Daemon restart and session restore | 4.7 s |
+| nftables table rebuild | 120 ms |
+| Logouts | 16/s sequential, p50 50 ms |
 
-Portal throughput on the VM: ~16 ms per request (fork + ucode handler, the same for redirects, the
-login page and static files), about 60 requests/s per core; 200 simultaneous fresh clients are all
-redirected within ~7 s.
+This test exposed neighbor-table, fq_codel memory, state-write and ubus paging limits. The fixes are included in the current code; see the [changelog](../CHANGELOG.md) for later changes.
 
-## 2000-client control-plane load test
+The poll time is approximately linear in the session count in this VM. It should not be extrapolated directly to a small MIPS router: CPU, memory pressure, shaper choice and traffic mix change the result. Use `wrthotspot status` and router resource measurements when choosing a capacity mode.
 
-`tests/integration/load-test.uc 2000 2M/10M` (after `netns-test.sh keep`): 2000 simulated clients,
-each a neighbor entry with its own MAC, all logged in with vouchers from a rate-limited profile.
-That's the worst case: every session gets two HTB classes, two flower filters and an fq_codel leaf.
+## Capacity model
 
-| Metric | Result |
-|---|---|
-| Hosts learned via rtnetlink | 2000 / 2000 |
-| Voucher creation | 2000 in 0.3 s |
-| Logins (sequential) | 2000 ok, 57/s, p50 14 ms, p95 20 ms |
-| Poll cycle with 2000 sessions | 0.64 s (max 0.93 s), poll every 10 s |
-| Daemon RSS | 39 MB (+28 MB for 2000 sessions) |
-| tc classes / filters | 2000 + 2000 (download on the bridge, upload on the IFB) |
-| Free memory left | ~36 MB of 236 MB |
-| Session list | paged, 1000 per ubus call |
-| Daemon restart | all 2000 sessions back after 4.7 s, no duplicates |
-| Dataplane rebuild (table deleted) | 120 ms nft transaction, 285 KiB ruleset |
-| Logouts (sequential) | 16/s, p50 50 ms; all tc classes removed |
+Version 0.9.0 computes limits from available memory, free flash and the conntrack table. Safe, balanced and max modes keep different memory reserves and cap sessions against conntrack capacity. The minimum is 10 sessions and 100 local accounts, with a warning if resources are that scarce. Administrators can set explicit limits.
 
-(Measured on the packaged 0.7.0 build.)
+| Example environment | Safe | Balanced | Max |
+|---|---|---|---|
+| Emulated 64 MB ARM router, 12-15 MB free | 55 sessions | 169 | 262 |
+| 128 MB class, 75 MB free, shaped (model estimate) | 320 | 640 | 1,187 |
+| 236 MB test VM, 140 MB free, shaped (model estimate) | 1,216 | 1,784 | 2,158 |
 
-### Problems found and fixed
+All three rows are **model outputs** for the stated inputs. The available memory in the first row was observed on an emulated ARM router; 55/169/262 are computed limits, not counts of concurrent clients successfully loaded on that router. The 2,000-session control-plane result above was measured with capacity limits disabled.
 
-| Problem at scale | Fix |
-|---|---|
-| Only ~500 of 2000 hosts seen | kernel neighbor table capped at `gc_thresh3` 1024 → `/etc/sysctl.d/12-wrthotspot.conf` raises it to 8192 (IPv4) / 16384 (IPv6); lost netlink bursts → on-demand lookup at login + resync every 30 s |
-| OOM kill at ~900 shaped sessions | default fq_codel leaf allocates 1024 flows (~1 MB/class) → leaf sized `flows 64 limit 300 memory_limit 512Kb` |
-| Login latency rising to 130 ms | user database written on every first login → debounced (1 s checkpoint, 5 s users) |
-| `sessions` call timing out | ubus messages are limited to 1 MiB → all list methods are paged (`offset`, `limit`, `search`); CLI, LuCI and panel page through them |
-| 4000 sessions after restart | auto-login ran before session restore → logins held until start-up completes; restore drops duplicate MACs |
-| 30 s restart | old ubus object stayed registered during shutdown → removed first |
-| Poll 1.25 s at 2000 sessions | parse caches, per-second limitation cache, rate/prune work every 30 s → 0.67 s |
+## Lite mode
 
-## Capacity tiers (0.8.0)
+Lite mode starts fewer processes for login and logout and uses nftables policing instead of tc HTB. It is selected automatically on routers with up to 64 MB RAM unless configured otherwise. It does not provide HTB burst, priority or fair queuing. It also skips the final counter read at logout, so up to one poll interval of traffic may be missed, and lets logged-out connections expire instead of flushing them.
 
-The router now computes its own limits (`capacity.uc`) instead of relying on a table like the one
-that used to be here. Costs measured with `tests/integration/capacity-probe.uc 1000` on 25.12:
+On an emulated 64 MB ARM router, a 50-client logout test recorded p50 543 ms with lite mode and 1,648 ms without it. Emulation timing is useful for comparing those two runs on the same setup, not for predicting real hardware latency.
 
-| Item | RAM per item | of which daemon |
-|---|---|---|
-| local user account | 4.4 KiB | 3 KiB (+ ~0.45 KiB in `users.json` on flash) |
-| learned host | 5 KiB | 2 KiB |
-| session, nft policing / no limit | 18 KiB | 8 KiB |
-| session, tc HTB shaping | 37 KiB | 3 KiB |
+## Emulated-router results
 
-Model (revised 2026-10-21 for small routers): budget = available memory + what the hotspot already
-uses − reserve; 85% of it goes to sessions, 15% to accounts, and accounts are also limited to half of
-the free flash. Free memory is sampled once a minute and the best of the last 10 samples counts, so a
-moment of churn (a reload, a package install) does not shrink the limits.
+The release feed installed on QEMU routers and the following suites passed:
 
-The reserve is a base buffer plus the memory that all clients share and that is bounded anyway:
-the kernel's conntrack table (`nf_conntrack_max` × 0.32 KiB) and the portal workers
-(`portal_max_requests` × 0.4 MB). Earlier versions charged connection tracking to every session
-(96 KiB each in safe mode) on top of a 16 MB floor, which left a 64 MB router with no budget at all.
+| Router | Install | Unit | Network namespace | Regression | Capacity | Panel API | RouterOS API |
+|---|---|---|---|---|---|---|---|
+| 25.12.6 MIPS big-endian | apk | passed | 154/154 | 24/24 | 16/16 | 53/53 | 34/34 |
+| 24.10.8 MIPS big-endian | opkg | passed | 154/154 | 24/24 | 16/16 | 53/53 | 34/34 |
+| 25.12.6 ARM Cortex-A53 | apk | passed | 154/154 | 24/24 | 16/16 | 53/53 | 34/34 |
 
-| Mode | Base kept free | Share of conntrack + workers | Traffic allowance per session | Flows per session (cap) |
-|---|---|---|---|---|
-| safe (default) | 8% of RAM, at least 4 MB | all | 16 KiB | 48 |
-| balanced | 5%, at least 3 MB | half | 8 KiB | 24 |
-| max | 3%, at least 2 MB | a quarter | 4 KiB | 12 |
+A Cortex-A15 image also passed regression, capacity and panel API checks. Testing on 24.10 MIPS found a socket-address incompatibility that prevented RADIUS, CoA and the API from working; version 0.9.0 passes address objects accepted by both releases. The MIPS runs are especially useful for checking big-endian RADIUS attribute encoding and RouterOS API word lengths.
 
-Sessions are also capped at `nf_conntrack_max` / flows per session: beyond that the kernel drops new
-connections for everyone. At least 10 sessions and 100 accounts are always allowed (with a warning
-when memory is that short), and `portal_max_requests` defaults to 8 / 16 / 32 workers for up to
-64 MB / 128 MB / more RAM. What that gives:
-
-| Router | RAM / free | safe | balanced | max |
-|---|---|---|---|---|
-| 64 MB armv7 (emulated, measured) | 52 / 12–15 MB, conntrack 7168 | 55 sessions | 169 | 262 |
-| 64 MB, more free | 59 / 14 MB | 78 | 210 | 310 |
-| 128 MB MT7621 / IPQ40xx, shaped | 123 / 75 MB, conntrack 15360 | 320 (conntrack) | 640 (conntrack) | 1187 |
-| test VM, shaped | 236 / 140 MB, conntrack 65536 | 1216 | 1784 | 2158 (2000 measured working without traffic) |
-
-Logins beyond the limit are refused with "the hotspot is full", unless `capacity_override` is set;
-user accounts beyond it need an admin to confirm (LuCI, panel, `force=1` in the CLI). Status,
-diagnostics, LuCI (Settings → Capacity) and `wrthotspot status` show tier, mode and usage.
-
-The poll cycle grows linearly (~0.3 ms per session on the VM); expect 3–5× that on MIPS, so leave
-`poll_interval` at its 10 s default (or raise it) above ~500 sessions.
-
-Portal bursts: every unauthenticated device's captive probes reach the portal, so a crowd arriving at
-once (a lecture hall, a bus) costs `portal_max_requests` × ~0.4 MB at peak. That is why the default
-scales with RAM; requests beyond it wait in uhttpd's queue instead of costing memory.
-
-Logging: every login/logout is logged at `info`. With hundreds of logins a minute the default 64 KiB
-logread ring wraps quickly — use remote syslog or raise `log_size` on busy sites.
-
-### Speed on a slow CPU (2026-10-21)
-
-Measured on the emulated MIPS 24Kc (`tests/emu`), old code against new on the same router, server
-time as curl reports it (time to first byte, without curl's own ~100 ms start):
-
-| | before | after |
-|---|---|---|
-| portal login page (`/login`) | 169 ms | 122 ms |
-| portal static file (CSS, image, script) | 115 ms | 82 ms, and cached 2 min by the browser |
-| rendering all 12 built-in pages | 393 ms | 103 ms |
-| floor: uhttpd fork, empty handler | 34 ms | 34 ms |
-
-Where the time went: a regex `match()` costs up to ~0.5 ms in ucode on this CPU, and the template
-engine ran several per tag and per variable; the portal also parsed the whole UCI config on every
-request although hotspotd already holds it. Now templates and the per-request helpers
-(`normalize_mac`, `normalize_ip`, page paths) use string functions only, and hotspotd hands the
-portal its settings in the `client` reply it already sent.
-
-Logins and logouts are bound by the `nft` and `tc` processes each one starts (45–60 ms per process
-here; the emulator's timing swings by ±50% between runs). `nft -f` batches cannot read named counters
-(`list counter` fails inside a batch), so the final counter read of a logout is a separate call.
-
-### Lite mode (2026-10-21)
-
-`option lite` (automatic up to 64 MB of RAM) trades features for fewer processes. Counted with
-logging wrappers around `nft`, `tc` and `conntrack` on the emulated 64 MB armv7, one login and one
-logout of a rate-limited user (the test's 2 s poll adds about one `nft` counter read to each window):
-
-| | login | logout |
-|---|---|---|
-| lite off (tc HTB) | 2 nft + 2 tc | 3 nft + 2 tc + 1 conntrack |
-| lite on | 2 nft (one of them the poll) | 2 nft (one of them the poll) |
-
-Logout latency in the load test (50 clients, same router and code, only the option toggled):
-1648 ms p50 without lite, 543 ms with it. Login times on that router were too noisy to compare.
-
-What lite mode gives up: tc HTB (burst, priority, fair queuing; the rate limit itself stays, as
-nftables policing), the final counter read at logout (up to one `poll_interval` of traffic before a
-logout is not counted) and the conntrack flush (flows of a logged-out client expire on their own;
-slots are reused only after 65519 logins). `tests/integration/lite-test.sh` checks it.
-
-## Emulated routers (QEMU)
-
-Status 2026-10-20. OpenWrt's own QEMU targets run the real release images of other CPUs:
-`malta/be` is a big-endian MIPS 24Kc like most older routers, `armsr/armv8` a 64-bit ARM. Each
-router installed `wrt-hotspot-full` from the public release feed with the README's commands, then
-ran the unit tests and every integration suite. The host was WSL2 (Ubuntu 24.04, QEMU 8.2) on a
-4-core PC.
-
-| Router | CPU | RAM | Install from the feed | Unit | netns | regression | capacity | panel API | RouterOS API |
-|---|---|---|---|---|---|---|---|---|---|
-| OpenWrt 25.12.6 malta | MIPS 24Kc BE | 128 MB | apk, 31 s | all | 154 / 154 | 24 / 24 | 16 / 16 | 53 / 53 | 34 / 34 |
-| OpenWrt 24.10.8 malta | MIPS 24Kc BE | 128 MB | opkg, 45 s, every signature verified | all | 154 / 154 | 24 / 24 | 16 / 16 | 53 / 53 | 34 / 34 |
-| OpenWrt 25.12.6 armsr | ARM Cortex-A53, 2 cores | 256 MB | apk, 58 s | all | 154 / 154 | 24 / 24 | 16 / 16 | 53 / 53 | 34 / 34 |
-
-An armv7 router (Cortex-A15, 25.12.6) also ran regression, capacity and panel API cleanly.
-A MIPS netns run takes about 6½ minutes, the whole set about 10.
-
-With the full package set, FreeRADIUS and the test tools installed, the 128 MB routers still had
-25–40 MB available. Big-endian MIPS matters for RADIUS: attribute encoding, Message-Authenticator and
-the RouterOS API word lengths all pass there.
-
-### Found and fixed
-
-| Found on | Problem | Fix |
-|---|---|---|
-| 24.10 (MIPS) | RADIUS, CoA and the RouterOS API were dead: ucode-mod-socket 2025.07 cannot parse the `[::]:port` address string, so the RADIUS socket was never bound and nothing listened on 3799 or 8728. x86 CI never opened a socket. | Socket addresses passed as objects, which both releases accept |
-| 128 MB, little memory free | The computed session limit was 0, which every caller reads as "unlimited": the most starved router had no limit at all | Auto limits never go below 1; the daemon logs a warning naming the reserve and the options |
-| all | The package origin showed the build host's path (`/home/kali/...`) | The build copies the feed (`src-cpy`) |
-| slow CPUs | Fixed sleeps in the tests (restart, DNS, CoA and Disconnect) | The tests wait for the daemon and poll; radclient retries |
-| 24.10 | radiusd crash-loops without OpenSSL's legacy provider (test setup only) | `libopenssl-legacy` added to the test tools |
-
-### How to run it
+To reproduce the QEMU workflow on a suitable Linux host:
 
 ```sh
-sh tests/emu/emu.sh fetch                 # images into ~/.cache/wrthotspot-emu
-sh tests/emu/emu.sh boot malta &          # or malta24, armv8, armv7
-sh tests/emu/emu.sh all malta             # setup, install from the feed, test tools, suites
-sh tests/emu/emu.sh status malta          # results (the MIPS run takes ~10 min)
-sh tests/emu/emu.sh deploy malta          # try changed ucode files before a release
+sh tests/emu/emu.sh fetch
+sh tests/emu/emu.sh boot malta &
+sh tests/emu/emu.sh all malta
+sh tests/emu/emu.sh status malta
 ```
 
-Initramfs images keep the whole root in RAM, including ~30 MB of test tools that a real router
-would keep on flash. So the suites run with `capacity_mode max`; the default safe mode is covered
-by the unit tests and `capacity-test.sh`.
+The script also supports `malta24`, `armv8` and `armv7`. See its usage output for options and prerequisites.
 
-What emulation can't show: switch chips, Wi-Fi drivers, flash wear and real CPU speed. TCG emulation
-is several times slower than a real 24Kc, so timings and iperf3 rates from it aren't meaningful.
+## Work remaining
 
-## Still open
-
-- Real MIPS 24Kc, MT7621 and IPQ40xx routers: memory, poll time and HTB throughput on each
-  (the code itself now passes on emulated MIPS and ARM, see above).
-- Real Wi-Fi clients (Android, iOS, Windows, macOS captive-portal assistants) end to end.
+- Test memory, poll time and HTB throughput on physical MIPS, MT7621 and IPQ40xx routers.
+- Test Android, iOS, Windows and macOS captive-portal assistants over real Wi-Fi.

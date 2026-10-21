@@ -1,107 +1,63 @@
-# Research: building a hotspot for OpenWrt inspired by MikroTik Hotspot
+# Design research
 
-Date: 2026-10-17. Four research tracks: runtime stack, prior art, nftables/IPv6 dataplane, MikroTik feature set.
-Items marked **[unverified]** must be tested on hardware before we rely on them.
+These notes record the choices made while designing WrtHotspot on 2026-10-17. They are historical research, not a current OpenWrt support matrix or a live comparison of competing products. Consult the [README](../README.md) for supported releases and [qualification](qualification.md) for tested behavior.
 
-## 1. OpenWrt release landscape
+## Requirements considered
 
-| Release | Status (openwrt.org/docs/guide-developer/security) | Kernel | nft | Package format |
-|---|---|---|---|---|
-| 23.05 | EOL since 2025-08 (last 23.05.6) | 5.15 | 1.0.8 | opkg `.ipk` |
-| 24.10 | projected EOL 2026-09 (last 24.10.8) | 6.6 | 1.1.1 | opkg `.ipk` |
-| 25.12 | the only supported release (25.12.6) | 6.12 | 1.1.x | apk `.apk` |
+The design aimed for a dual-stack captive portal with local and RADIUS authentication, accounting, per-user shaping and a management interface that works on small OpenWrt routers. It also needed to survive firewall reloads without silently allowing unauthenticated IPv6 traffic.
 
-Decision: minimum target is 24.10; 25.12 first-class. 23.05 is dropped (EOL, and it lacks ucode-mod-socket/digest needed for RADIUS).
-The feed must publish both an ipk tree (usign key) and an apk tree (apk key).
+The project selected OpenWrt 24.10 as its minimum target and publishes separate feeds for 24.10 (ipk/opkg) and 25.12 (apk). Package and dependency availability should be checked against each target release when building or deploying.
 
-## 2. Runtime stack
+| Requirement | Design consequence |
+|---|---|
+| IPv4 and IPv6 must both be captive | Use an `inet` nftables table and test both families in the same login flow |
+| One device may use many IPv6 privacy addresses | Associate authorization with its MAC on the hotspot interface |
+| Router memory and flash vary widely | Keep the core package small; make RADIUS and tc shaping optional |
+| Firewall reloads can replace packet rules | Reconcile hotspot state from the daemon after a reload |
+| Billing systems expect MikroTik interfaces | Support selected RADIUS attributes and API commands explicitly |
 
-The packet path is entirely in the kernel (nftables sets/maps, tc). The daemon only handles logins, timers,
-RADIUS and the web pages, so the language decides footprint and portability, not throughput.
+## Runtime choice
 
-| | ucode | Lua 5.1 | C (libubox) | Go | Rust |
-|---|---|---|---|---|---|
-| Extra flash | ~60 KB | ~150 KB | 50–150 KB | 2–8 MB | 0.5–2 MB |
-| RAM (est.) | 1–3 MB | 1–3 MB | <1 MB | 5–15 MB [unverified] | 1–3 MB |
-| Build per CPU arch | no (`PKGARCH:=all`) | no | yes, per release | yes | yes, MIPS is Tier 3 |
-| Already on every image | **yes** (fw4, hostapd, LuCI backend) | no (optional since 23.05) | libs yes | no | no |
-| Dev speed | high | high | low | high | medium |
+The dataplane uses nftables and, when installed, tc. The daemon handles logins, timers, RADIUS and control-plane state. This keeps routine forwarding in the kernel.
 
-ucode module availability (official feeds, mips_24kc):
+ucode was chosen because it is part of the OpenWrt stack, integrates with ubus/UCI/uloop and can be packaged without compiling a binary for each CPU architecture. The optional RADIUS package adds socket and struct modules. The current package dependencies are defined in [the Makefile](../feed/net/wrt-hotspot/Makefile); the original flash and RAM estimates used to compare languages are not deployment measurements.
 
-| Module | 23.05 | 24.10 | 25.12 | Used for |
-|---|---|---|---|---|
-| uloop, ubus, uci, fs, rtnl, nl80211, struct, log, math | yes | yes | yes | event loop, IPC, config, neighbor table, Wi-Fi |
-| **socket** | **no** (source present in 23.05's ucode) | yes | yes | RADIUS UDP, CoA listener |
-| **digest** | **no** | yes | yes | MD5 for CHAP / RADIUS |
-| uhttpd-mod-ucode | yes | yes | yes | captive web server |
-| rpcd-mod-ucode | yes | yes | yes | LuCI + panel backend |
+This choice has a cost: on slow CPUs, portal request parsing and per-session control work can be noticeable even though packet forwarding remains in the kernel. The [qualification report](qualification.md) records the later MIPS portal optimization and distinguishes emulated timing from physical performance.
 
-**Choice: ucode**, on 24.10+ where every needed module is in the official feeds. `digest` has no HMAC; HMAC-MD5 (Message-Authenticator, needed against BlastRADIUS) is built from
-two MD5 calls. A small C helper is kept as an option only if profiling shows a need.
+## Packet-handling decisions
 
-## 3. Prior art
+- **Authorize by device MAC on the hotspot interface.** A single login then covers IPv4 and changing IPv6 addresses on that device. A MAC alone is not a durable person identity, so user authentication and session limits remain separate.
+- **Use a dedicated nftables table.** WrtHotspot can rebuild its state after firewall changes without editing the `inet fw4` table directly.
+- **Treat both IP families as captive.** The design avoids an unauthenticated IPv6 route around an IPv4-only portal.
+- **Do not impersonate HTTPS destinations.** The portal redirects HTTP, serves the RFC 8908 captive API and announces its URI where supported.
+- **Disable flow offloading for hotspot traffic.** Otherwise packets can bypass accounting, quotas and shaping.
+- **Use kernel counters and rate handling.** The daemon polls and manages state rather than processing each forwarded packet.
 
-| Project | Dataplane | IPv6 | RADIUS | Shaping | Status |
-|---|---|---|---|---|---|
-| openNDS | nftables, own tables | partial; IPv6-only unsupported (#625) and bypass over IPv6 (#706) | none (scripts) | packets/min limit | active, 1 maintainer, feed lags |
-| nodogsplash | iptables | none (#38, open since 2014) | no | no | stale |
-| CoovaChilli | tun + optional kernel module | none (#587) | full incl. CoA/DM | in-daemon bucket | slow, 200+ open issues |
-| apfree-wifidog | nftables + eBPF | per (MAC, IPv6) rule | not found | eBPF | active |
-| pfSense CP | ipfw/dummynet | none (Redmine #1831, since 2011) | auth+acct | dummynet | IPv6 missing |
-| OPNsense CP | pf | **full**, MAC "roaming" | auth+acct | ipfw | active |
-| MikroTik Hotspot | proprietary | **none** ("works reliably only when IPv4 is used") | full incl. CoA | simple queues | — |
+The actual ruleset and reconciliation behavior are in the [source](../feed/net/wrt-hotspot/files/usr/share/ucode/wrthotspot/nft.uc) and described in [architecture](architecture.md). Earlier syntax sketches and untested kernel assumptions were removed from this page because they could be mistaken for deployable rules.
 
-No OpenWrt project combines nftables, full IPv6, full RADIUS (with CoA) and real per-user shaping. That is the gap.
+Two constraints remain relevant to operators. First, an `accept` verdict in WrtHotspot's own table does not override a separate firewall drop, so the OpenWrt zone still needs forwarding to WAN. Second, DNS-based walled-garden entries depend on resolving and refreshing destination addresses; subdomain population works best with `dnsmasq-full` and its `nftset` support. These are reasons for the setup and diagnostics checks in the CLI.
 
-### Lessons that shape the design
-1. **Default-deny both families from day one.** IPv6 bypass is the most common real-world failure (openNDS #706).
-2. **Authorize by MAC, not by IP.** SLAAC privacy addresses then work with no re-login (only OPNsense does this today).
-3. **Use our own nft table, never rules inside `inet fw4`.** fw4 reload only rebuilds `inet fw4`; but
-   `/etc/init.d/firewall stop` runs `fw4 flush`, which deletes *every* table, so the daemon must re-apply its state.
-4. **Use sets/maps updated in atomic batches**, never one `nft` process per client rule (openNDS #738 leaked rules).
-5. **Flow offloading silently breaks accounting, quotas and shaping** (openNDS #530). fw4 puts its `flow offload`
-   rule first in its forward chain, so another table cannot exclude clients. Offload must be off on hotspot traffic.
-6. **Proper RADIUS incl. CoA/Disconnect** — only CoovaChilli has it among open projects.
-7. **Never intercept TCP/443.** Reject it with TCP reset for unauthenticated clients, announce the portal via
-   RFC 8910 and serve the RFC 8908 API; keep the HTTP redirect as the fallback.
+## Compatibility scope
 
-## 4. Dataplane findings (nftables, kernel 5.15+)
+MikroTik Hotspot informed the login methods, page variables, RADIUS attributes and billing API subset. WrtHotspot also handles IPv6 and provides its own voucher panel. This does not imply complete RouterOS compatibility. The exact billing interfaces are listed in [billing integration](billing-integration.md).
 
-- `ether saddr` is only available on the input path (prerouting/input/forward of received frames), not on replies.
-  **Pattern: identify the client by MAC once on `ct state new` in prerouting and set `ct mark` = client id.**
-  Everything else (both directions, both families, accounting, shaping) keys on `ct mark`.
-- Per-element counters in sets: kernel 5.7+. Named counter / quota / limit objects selected by map
-  (`counter name ct mark map @m`): syntax must be checked with `nft -c` on nft 1.0.8 and 1.1.1 **[unverified]**.
-- An `accept` in our table does not override fw4's `drop`. Our table only drops, rejects, redirects or marks.
-- `redirect` works for IPv6 in `inet` nat chains on 5.15/6.6 (DNS hijack + HTTP redirect for both families).
-- Walled garden by domain: dnsmasq `nftset=` (dnsmasq-full ≥ 2.87; early 23.05 shipped 2.86).
-- RFC 8910: DHCPv4 option 114 via dnsmasq works everywhere. odhcpd's `captive_portal_uri` (DHCPv4/DHCPv6/RA option 37)
-  is only in recent odhcpd master **[unverified on 24.10/25.12]**; otherwise we send RA option 37 ourselves or skip it.
-- Shaping options:
-  - nft `limit` objects per client (policing, drops over rate): cheap at 2000 clients, TCP-unfriendly.
-  - HTB per client: download on LAN egress with `fw` filter on skb->mark; upload on WAN egress or IFB with
-    `act_ctinfo` restoring the mark. Close to MikroTik simple queues (rate, burst, priority, min-rate).
-- Accounting: named counters per client in each direction, read with `nft -j list counters`; RADIUS
-  gigawords handled by the daemon.
+## References used during design
 
-## 5. MikroTik feature catalog
+- [OpenWrt release and security documentation](https://openwrt.org/docs/guide-developer/security)
+- [OpenWrt firewall4 source](https://github.com/openwrt/firewall4)
+- [Linux kernel flowtable documentation](https://docs.kernel.org/networking/nf_flowtable.html)
+- [nftables documentation](https://wiki.nftables.org/)
+- [OpenWrt rpcd source](https://github.com/openwrt/rpcd)
+- [OpenWrt odhcpd source](https://github.com/openwrt/odhcpd)
+- [OPNsense captive portal documentation](https://docs.opnsense.org/manual/captiveportal.html)
+- [MikroTik HotSpot documentation](https://help.mikrotik.com/docs/spaces/ROS/pages/56459266/HotSpot+-+Captive+portal)
 
-The full property-level catalog (servers, server profiles, users, user profiles, active/host/cookie, ip-binding,
-walled garden, servlet pages and variables, RADIUS attributes and VSAs, CoA, User Manager) is the feature checklist in
-[architecture.md §8](architecture.md#8-feature-comparison-with-mikrotik-hotspot).
+These sources supplied background. WrtHotspot's own functionality and performance claims are based on its source and the test results linked above.
 
-MikroTik gaps we can fill: IPv6; MAC randomization handling; GUI voucher batches and printing; RFC 8908/8910;
-a dual-stack walled garden by domain.
+## Questions for physical qualification
 
-## Sources
-- Release status: https://openwrt.org/docs/guide-developer/security
-- Package indexes: https://downloads.openwrt.org/releases/{23.05.5,24.10.4,25.12.6}/packages/mips_24kc/base/
-- fw4: https://github.com/openwrt/firewall4 (`root/sbin/fw4`, `templates/ruleset.uc`, `etc/init.d/firewall`)
-- nftables: https://wiki.nftables.org (Matching_packet_headers, Sets, Configuring_chains, kernel updates list)
-- Flowtable: https://docs.kernel.org/networking/nf_flowtable.html
-- rpcd ucode plugins: https://github.com/openwrt/rpcd/blob/master/ucode.c
-- odhcpd: https://github.com/openwrt/odhcpd/blob/master/README.md ; RFC 8908/8910
-- openNDS issues #530 #596 #625 #628 #698 #706 #708 #738; nodogsplash #38; coova-chilli #587 #493 #477; pfSense Redmine #1831
-- OPNsense captive portal: https://docs.opnsense.org/manual/captiveportal.html
-- MikroTik: help.mikrotik.com pages *HotSpot – Captive portal*, *Hotspot customisation*, *RADIUS*, *User Manager*
+- How much memory and poll time do 500, 1,000 and 2,000 shaped sessions consume on representative MIPS, MT7621 and IPQ40xx devices?
+- How do switch offload, Wi-Fi drivers and bridge topology affect the intended packet path on those devices?
+- Do Android, iOS, Windows and macOS captive assistants display the portal reliably with a trusted certificate and RFC 8910 announcements?
+
+These questions require physical-router and client tests; QEMU results do not answer them.

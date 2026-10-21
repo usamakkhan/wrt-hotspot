@@ -75,7 +75,7 @@ for f in $FILES; do
 	esac
 done
 
-BANNER="> **Superseded by [$V](https://github.com/$REPO/releases/tag/$TAG).** This release's feed URL also serves $V, so routers set up with it get the update with \`apk upgrade\` / \`opkg upgrade\`. New installs should use the \`releases/latest/download/\` URLs from the [README](https://github.com/$REPO#install-from-the-feed)."
+BANNER="> **Superseded by [$V](https://github.com/$REPO/releases/tag/$TAG).** This release's feed URL also serves $V, so routers set up with it get the update with \`apk upgrade\` / \`opkg upgrade\`. New installs should use the \`releases/latest/download/\` URLs from the [README](https://github.com/$REPO#install)."
 TMP=$(mktemp)
 
 for old in $("$GH" release list --limit 100 --json tagName -q '.[].tagName'); do

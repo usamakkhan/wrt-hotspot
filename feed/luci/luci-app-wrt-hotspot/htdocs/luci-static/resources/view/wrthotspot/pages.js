@@ -22,7 +22,7 @@ var callPut = rpc.declare({ object: 'wrthotspot', method: 'pages_put', params: [
 var callCommit = rpc.declare({ object: 'wrthotspot', method: 'pages_commit', params: [ 'name', 'token' ] });
 var callRemove = rpc.declare({ object: 'wrthotspot', method: 'pages_remove', params: [ 'name' ] });
 
-var DOCS = 'https://github.com/usamakkhan/wrt-hotspot#custom-login-pages';
+var DOCS = 'https://github.com/usamakkhan/wrt-hotspot#custom-portal-pages';
 var SAMPLE = 'classic';
 
 /* ---- bytes <-> base64 ---- */

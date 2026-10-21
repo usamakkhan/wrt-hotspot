@@ -7,7 +7,7 @@ with WrtHotspot. Edit it, zip it and upload it under
 LuCI > Services > Hotspot > Login Pages.
 
 Project:  https://github.com/usamakkhan/wrt-hotspot
-Docs:     https://github.com/usamakkhan/wrt-hotspot#custom-login-pages
+Docs:     https://github.com/usamakkhan/wrt-hotspot#custom-portal-pages
 Issues:   https://github.com/usamakkhan/wrt-hotspot/issues
 
 
