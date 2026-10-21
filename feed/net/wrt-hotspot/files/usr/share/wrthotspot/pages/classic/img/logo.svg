@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 52" role="img" aria-label="OpenWrt">
+	<!-- Simplified OpenWrt-style mark: an access point with radio waves and
+	     the wordmark. Replace this file with your own logo (any size SVG). -->
+	<g fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round">
+		<path d="M13 16a14 14 0 0 1 22 0"/>
+		<path d="M8 10a21 21 0 0 1 32 0"/>
+		<path d="M18 22a7 7 0 0 1 12 0"/>
+	</g>
+	<circle cx="24" cy="28" r="3" fill="#fff"/>
+	<rect x="9" y="34" width="30" height="12" rx="3" fill="#fff"/>
+	<circle cx="15" cy="40" r="1.6" fill="#1d4f73"/>
+	<circle cx="21" cy="40" r="1.6" fill="#1d4f73"/>
+	<text x="50" y="42" fill="#fff" font-family="-apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="33" font-weight="700" letter-spacing="-.5">OpenWrt</text>
+</svg>

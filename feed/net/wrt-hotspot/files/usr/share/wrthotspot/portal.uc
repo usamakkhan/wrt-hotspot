@@ -13,8 +13,8 @@ import * as tpl from 'wrthotspot.template';
 const MIME = {
 	html: 'text/html; charset=utf-8', css: 'text/css', js: 'application/javascript',
 	png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
-	svg: 'image/svg+xml', ico: 'image/x-icon', woff2: 'font/woff2', json: 'application/json',
-	txt: 'text/plain; charset=utf-8',
+	svg: 'image/svg+xml', ico: 'image/x-icon', woff2: 'font/woff2', woff: 'font/woff', webp: 'image/webp',
+	json: 'application/json', txt: 'text/plain; charset=utf-8',
 };
 
 const BUILTIN_PAGES = '/usr/share/wrthotspot/pages/default';
@@ -254,8 +254,13 @@ function do_login(ctx, conn) {
 	let sp = ctx.sp;
 	let req = { ip: ctx.ip, username: f.username ?? '', password: f.password ?? '' };
 
-	// (only the form decides: an account may well be called "T-something")
-	if (f.trial == 'yes')
+	// (only the form decides: an account may well be called "T-something").
+	// MikroTik's stock trial link sends username=T-<the client's own MAC> and
+	// no password; that exact name is a trial request.
+	let mt_trial = ('trial' in sp.login_by) && !f.password && ctx.client?.mac &&
+		lc(req.username) == `t-${lc(ctx.client.mac)}`;
+
+	if (f.trial == 'yes' || mt_trial)
 		req.method = 'trial';
 	else if ('http-chap' in sp.login_by && !ctx.https_login && match(req.password, /^[0-9a-fA-F]{32}$/))
 		req = { ...req, method: 'http-chap', chap_response: req.password };

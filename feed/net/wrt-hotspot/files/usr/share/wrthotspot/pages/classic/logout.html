@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="pragma" content="no-cache">
+<meta http-equiv="expires" content="-1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$(identity) - Logged out</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="main">
+	<div class="wrap">
+		<img class="logo" src="img/logo.svg" alt="OpenWrt">
+		<p class="info">You have just logged out</p>
+		<table>
+			<tr><td>User name:</td><td>$(username)</td></tr>
+			<tr><td>IP address:</td><td>$(ip)</td></tr>
+			<tr><td>MAC address:</td><td>$(mac)</td></tr>
+			<tr><td>Session time:</td><td>$(uptime)</td></tr>
+			<tr><td>Bytes up/down:</td><td>$(bytes-in-nice) / $(bytes-out-nice)</td></tr>
+		</table>
+		<a class="button" href="$(link-login-only)">Log in</a>
+		<p class="info bt">Powered by <a href="https://openwrt.org/">OpenWrt</a> &middot; <a href="https://github.com/usamakkhan/wrt-hotspot">WrtHotspot</a></p>
+	</div>
+</main>
+</body>
+</html>

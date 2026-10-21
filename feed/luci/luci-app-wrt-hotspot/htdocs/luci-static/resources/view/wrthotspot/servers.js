@@ -2,8 +2,11 @@
 'require view';
 'require form';
 'require uci';
+'require rpc';
 'require tools.widgets as widgets';
 'require tools.wrthotspot as hs';
+
+var callPages = rpc.declare({ object: 'wrthotspot', method: 'pages_list', expect: { pages: [] } });
 
 function profileNames(type) {
 	return uci.sections('wrthotspot', type).map(function(s) { return s.name || s['.name']; });
@@ -29,7 +32,8 @@ return view.extend({
 	load: function() {
 		return Promise.all([
 			uci.load('wrthotspot'),
-			L.resolveDefault(hs.status(), {})
+			L.resolveDefault(hs.status(), {}),
+			L.resolveDefault(callPages(), [])
 		]);
 	},
 
@@ -115,9 +119,13 @@ return view.extend({
 		o.password = true;
 		o.modalonly = true;
 
-		o = s.taboption('general', form.Value, 'html_directory', _('Page directory'),
-			_('Login pages; MikroTik hotspot page sets work unmodified.'));
+		o = s.taboption('general', form.Value, 'html_directory', _('Login pages'),
+			_('Page set shown to clients. Upload your own under <em>Login Pages</em>; MikroTik hotspot page sets work too.'));
 		o.placeholder = '/usr/share/wrthotspot/pages/default';
+		(data[2] || []).forEach(function(p) {
+			if (p.login)
+				o.value(p.dir, '%s (%s)'.format(p.name, p.builtin ? _('built-in') : _('uploaded')));
+		});
 		o.modalonly = true;
 
 		o = s.taboption('general', form.Flag, 'transparent_proxy', _('Transparent HTTP proxy'),

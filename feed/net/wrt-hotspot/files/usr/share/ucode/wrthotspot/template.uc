@@ -26,8 +26,12 @@ export function parse(src) {
 	function test(expr) {
 		let m = match(expr, /^([A-Za-z0-9_-]+)\s*(==|!=)\s*(.*)$/);
 
-		if (m)
-			return { name: m[1], op: m[2], value: trim(m[3]) };
+		if (m) {
+			// MikroTik pages quote the value: $(if trial == 'yes'), $(if error == "").
+			let v = trim(m[3]);
+			let q = match(v, /^"(.*)"$/) ?? match(v, /^'(.*)'$/);
+			return { name: m[1], op: m[2], value: q ? q[1] : v };
+		}
 
 		return { name: trim(expr), op: null };
 	}

@@ -54,6 +54,12 @@
 		"action": { "type": "view", "path": "wrthotspot/bindings" }
 	},
 
+	"admin/services/wrthotspot/pages": {
+		"title": "Login Pages",
+		"order": 75,
+		"action": { "type": "view", "path": "wrthotspot/pages" }
+	},
+
 	"admin/services/wrthotspot/radius": {
 		"title": "RADIUS",
 		"order": 80,

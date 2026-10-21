@@ -3,13 +3,15 @@
 		"description": "Grant access to the WrtHotspot captive portal",
 		"read": {
 			"ubus": {
-				"wrthotspot": [ "status", "sessions", "hosts", "cookies", "user_list", "user_get", "check" ]
+				"wrthotspot": [ "status", "sessions", "hosts", "cookies", "user_list", "user_get", "check",
+					"pages_list", "pages_files", "pages_read" ]
 			},
 			"uci": [ "wrthotspot", "network", "firewall", "dhcp" ]
 		},
 		"write": {
 			"ubus": {
-				"wrthotspot": [ "logout", "user_set", "user_remove", "user_reset_counters", "cookie_remove", "reload", "flush", "setup" ]
+				"wrthotspot": [ "logout", "user_set", "user_remove", "user_reset_counters", "cookie_remove", "reload", "flush", "setup",
+					"pages_begin", "pages_put", "pages_commit", "pages_remove" ]
 			},
 			"uci": [ "wrthotspot" ]
 		}

@@ -98,9 +98,9 @@ define Package/wrt-hotspot/install
 	$(INSTALL_DIR) $(1)/usr/share/ucode/wrthotspot
 	$(INSTALL_DATA) $(filter-out %/radius.uc %/rosapi.uc,$(wildcard ./files/usr/share/ucode/wrthotspot/*.uc)) \
 		$(1)/usr/share/ucode/wrthotspot/
-	$(INSTALL_DIR) $(1)/usr/share/wrthotspot/pages/default
+	$(INSTALL_DIR) $(1)/usr/share/wrthotspot/pages
 	$(INSTALL_DATA) ./files/usr/share/wrthotspot/portal.uc $(1)/usr/share/wrthotspot/
-	$(INSTALL_DATA) ./files/usr/share/wrthotspot/pages/default/* $(1)/usr/share/wrthotspot/pages/default/
+	$(CP) ./files/usr/share/wrthotspot/pages/* $(1)/usr/share/wrthotspot/pages/
 endef
 
 define Package/wrt-hotspot-radius/install

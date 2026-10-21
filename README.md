@@ -34,7 +34,8 @@ emulated MIPS (big-endian, 128 MB) and ARM routers in QEMU (`tests/emu/`); physi
 - RFC 8908 API at `/api/captive`; RFC 8910 URI announced in DHCPv4 option 114 (dnsmasq) and via
   odhcpd's `captive_portal_uri` (RA/DHCPv6 on odhcpd 2026+).
 - Portal name (`dns_name`) answered by dnsmasq with the router's IPv4 *and* IPv6 address per interface.
-- MikroTik-compatible page templates (`$(var)`, `$(if)…$(elif)…$(else)…$(endif)`) and servlet pages.
+- MikroTik-compatible page templates (`$(var)`, `$(if)…$(elif)…$(else)…$(endif)`) and servlet pages;
+  custom login pages uploaded as a zip in LuCI (see [Custom login pages](#custom-login-pages)).
 - Survives daemon restart, `fw4 reload`, and even deletion of its table (rebuilt within one poll).
 - RADIUS (RFC 2865/2866/2869/5176): PAP, CHAP and MAC authentication; Message-Authenticator on every
   request and required in replies (BlastRADIUS hardening); server failover with retries; accounting
@@ -85,10 +86,11 @@ them. Voucher codes log in on the portal with the code alone.
 
 ## LuCI app
 
-`luci-app-wrt-hotspot` adds **Services → Hotspot** with ten pages: Status (live sessions with logout,
+`luci-app-wrt-hotspot` adds **Services → Hotspot** with eleven pages: Status (live sessions with logout,
 hosts with their IPv4/IPv6 addresses, cookies), Users (add/edit/reset/delete local users), Servers and
-server profiles, User Profiles, Limitations, Walled Garden, IP Bindings, RADIUS, Settings, and
-Diagnostics (health checks with one-click fixes, hotspot network setup, log everybody out).
+server profiles, User Profiles, Limitations, Walled Garden, IP Bindings, Login Pages (upload and download
+page sets), RADIUS, Settings, and Diagnostics (health checks with one-click fixes, hotspot network setup,
+log everybody out).
 Configuration changes apply through LuCI's normal Save & Apply; hotspotd reloads in place without
 dropping sessions.
 
@@ -104,6 +106,32 @@ lower because of TCP's ramp-up.
 Note on IPv6 IP bindings: a binding by single IPv6 address only matches that address, and devices
 change addresses (SLAAC, privacy extensions). Bind IPv6 devices by MAC.
 
+## Custom login pages
+
+The pages hotspot users see come from a *page set*: a folder with `login.html` and, optionally,
+`alogin.html`, `status.html`, `logout.html`, `flogout.html`, `fstatus.html`, CSS, images and scripts.
+Two sets are built in: `default` (minimal) and `classic` (full-screen layout in the style of RouterOS's
+stock hotspot page, OpenWrt logo, three colour themes).
+
+To make your own, open **Services → Hotspot → Login Pages** in LuCI:
+
+1. **Download sample** gets the `classic` set as a zip, with a README listing every page variable.
+   Any other set can be downloaded the same way.
+2. Edit the pages, replace `img/logo.svg`, zip the folder.
+3. **Upload** the zip under a name of your choice. The browser unpacks it (stock OpenWrt has no
+   `unzip`); the router checks every file and installs the set only when the whole upload is good.
+4. **Use** picks the set for a server profile (or choose it under Servers → *Login pages*).
+
+Rules: `login.html` at the top of the zip or inside one folder; file types html, css, js, png, jpg,
+gif, svg, ico, webp, woff/woff2, json and txt (others are left out and reported); at most 512 KiB per
+file, 2 MiB and 200 files per set; enough free flash. Uploaded sets live in `/etc/wrthotspot/pages/`
+and survive a sysupgrade. A page missing from a set falls back to the built-in default page.
+
+MikroTik hotspot page sets work as they are: zip the RouterOS `hotspot` folder and upload it.
+Variables use the MikroTik syntax (`$(var)`, `$(if var == 'x')…$(endif)`), values are HTML-escaped
+(`$(var-raw)` opts out), and the stock trial link (`username=T-$(mac-esc)`) starts a trial. RouterOS
+files WrtHotspot does not use (`errors.txt`, `rlogin.html`, `radvert.html`, `xml/`) are kept but ignored.
+
 ## Layout
 
 ```
@@ -113,8 +141,8 @@ feed/net/wrt-hotspot-panel/     operator panel (www/hotspot/) + rpcd ACL for sta
   files/usr/sbin/hotspotd       daemon (ucode, uloop, ubus object "wrthotspot")
   files/usr/sbin/wrthotspot     CLI
   files/usr/share/ucode/wrthotspot/   modules: core, nft, hosts, users, config, api, dns, radius, shaper, limits, diag,
-                                vouchers, records, operators, template, util
-  files/usr/share/wrthotspot/   portal.uc (uhttpd handler) and default pages
+                                vouchers, records, operators, pages, template, util
+  files/usr/share/wrthotspot/   portal.uc (uhttpd handler) and the built-in page sets (default, classic)
 scripts/build-packages.sh       builds all packages with the official SDK of a release
 tests/unit/                     ucode unit tests        (sh tests/run-unit.sh)
 tests/integration/              end-to-end netns test   (sh tests/integration/netns-test.sh),

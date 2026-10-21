@@ -6,9 +6,9 @@ SRC=$(cd "$(dirname "$0")/../../feed/net/wrt-hotspot/files" && pwd)
 cp "$SRC/etc/init.d/wrthotspot" /etc/init.d/wrthotspot && chmod 0755 /etc/init.d/wrthotspot
 cp "$SRC/usr/sbin/hotspotd" /usr/sbin/hotspotd && chmod 0755 /usr/sbin/hotspotd
 cp "$SRC/usr/sbin/wrthotspot" /usr/sbin/wrthotspot && chmod 0755 /usr/sbin/wrthotspot
-mkdir -p /usr/share/ucode/wrthotspot /usr/share/wrthotspot/pages/default
+mkdir -p /usr/share/ucode/wrthotspot /usr/share/wrthotspot/pages
 cp "$SRC"/usr/share/ucode/wrthotspot/*.uc /usr/share/ucode/wrthotspot/
 cp "$SRC/usr/share/wrthotspot/portal.uc" /usr/share/wrthotspot/
 mkdir -p /etc/sysctl.d && cp "$SRC/etc/sysctl.d/12-wrthotspot.conf" /etc/sysctl.d/ && sysctl -q -p /etc/sysctl.d/12-wrthotspot.conf
-cp "$SRC"/usr/share/wrthotspot/pages/default/* /usr/share/wrthotspot/pages/default/
+cp -R "$SRC"/usr/share/wrthotspot/pages/* /usr/share/wrthotspot/pages/
 echo "installed"

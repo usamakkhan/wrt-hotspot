@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Custom login pages
+
+- **Login Pages** in LuCI: upload a zip of hotspot pages, download any page set as a zip, pick a set for a server profile, remove uploaded sets. The browser unpacks the zip, so the router needs no `unzip`. The router checks names, file types and sizes, keeps enough flash free, and installs a set only after the whole upload passed. Uploaded sets live in `/etc/wrthotspot/pages/` and survive a sysupgrade.
+- New built-in page set `classic`, laid out like RouterOS's stock hotspot page, with the OpenWrt logo, links to the project, three colour themes and a README of all page variables. **Download sample** in LuCI gives it as a zip to start from.
+- MikroTik page sets now really work unmodified:
+  - quoted comparisons (`$(if trial == 'yes')`, `$(if error == "")`) were compared with the quotes and never matched;
+  - the stock trial link (`username=T-$(mac-esc)`) starts a trial.
+- The portal serves `.webp` and `.woff` files.
+
 ### Fixes (found on emulated MIPS and ARM routers)
 
 - **OpenWrt 24.10: RADIUS, CoA and the RouterOS API did not work.** Their sockets were bound with a `[::]:port` address string, which ucode-mod-socket on 24.10 cannot parse, so no RADIUS request was ever sent and nothing listened on 3799 or 8728. Addresses are now passed as objects, which both releases accept.

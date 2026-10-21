@@ -8,6 +8,7 @@ import { VERSION, CAUSE } from 'wrthotspot.core';
 import { run_checks } from 'wrthotspot.diag';
 import * as vouchers from 'wrthotspot.vouchers';
 import * as operators from 'wrthotspot.operators';
+import * as pages from 'wrthotspot.pages';
 import { run, shell_quote } from 'wrthotspot.util';
 
 const USER_ARGS = {
@@ -365,6 +366,66 @@ export function publish(conn, core) {
 			args: { name: '' },
 			call: function(req) {
 				return core.users().reset_counters(req.args.name) ? { ok: true } : err('no such user');
+			},
+		},
+
+		// Login page sets (LuCI "Login Pages"). Uploads: begin, put... , commit.
+		pages_list: {
+			call: function() {
+				return {
+					pages: pages.list(core.config()),
+					limits: { file: pages.MAX_FILE, total: pages.MAX_TOTAL, files: pages.MAX_FILES, chunk: pages.CHUNK },
+					extensions: pages.EXTENSIONS,
+				};
+			},
+		},
+
+		pages_files: {
+			args: { name: '' },
+			call: function(req) {
+				let r = pages.files(req.args.name);
+				return r[0] ? { ok: true, files: r[0] } : err(r[1]);
+			},
+		},
+
+		pages_read: {
+			args: { name: '', path: '', offset: 0 },
+			call: function(req) {
+				let r = pages.read(req.args.name, req.args.path, req.args.offset);
+				return r[0] ? { ok: true, ...r[0] } : err(r[1]);
+			},
+		},
+
+		pages_begin: {
+			args: { name: '' },
+			call: function(req) {
+				let e = pages.begin(req.args.name);
+				return e ? err(e) : { ok: true };
+			},
+		},
+
+		pages_put: {
+			args: { name: '', path: '', data: '', offset: 0 },
+			call: function(req) {
+				let a = req.args;
+				let e = pages.put(a.name, a.path, a.data, a.offset);
+				return e ? err(e) : { ok: true };
+			},
+		},
+
+		pages_commit: {
+			args: { name: '' },
+			call: function(req) {
+				let r = pages.commit(req.args.name);
+				return r[0] ? { ok: true, ...r[0] } : err(r[1]);
+			},
+		},
+
+		pages_remove: {
+			args: { name: '' },
+			call: function(req) {
+				let e = pages.remove(req.args.name, core.config());
+				return e ? err(e) : { ok: true };
 			},
 		},
 

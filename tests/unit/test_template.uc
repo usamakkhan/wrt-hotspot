@@ -18,5 +18,9 @@ eq(render('$(if trial != yes)no-trial$(endif)', v), 'no-trial', '!=');
 eq(render('$(if logged-in)$(if trial == yes)a$(else)b$(endif)$(endif)', v), 'b', 'nested');
 eq(render('$(document).ready()', v), '$(document).ready()', 'jQuery untouched');
 eq(render('price $(', v), 'price $(', 'unterminated');
+// MikroTik's stock pages quote the compared value.
+eq(render("$(if trial == 'no')N$(else)Y$(endif)", v), 'N', 'single-quoted value');
+eq(render('$(if error == "")none$(else)err$(endif)', v), 'none', 'double-quoted empty value');
+eq(render('$(if username != "bob")x$(else)y$(endif)', v), 'y', 'quoted !=');
 
 done();

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="pragma" content="no-cache">
+<meta http-equiv="expires" content="-1">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$(identity) - Log in</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<!-- Colour themes: <body>, <body class="lite"> or <body class="dark"> -->
+<body>
+$(if chap-id)
+<!-- HTTP CHAP: the password leaves the browser only as an MD5 hash. -->
+<form name="sendin" action="$(link-login-only)" method="post" style="display:none">
+	<input type="hidden" name="username">
+	<input type="hidden" name="password">
+	<input type="hidden" name="dst" value="$(link-orig)">
+	<input type="hidden" name="popup" value="true">
+</form>
+<script src="md5.js"></script>
+<script>
+function doLogin() {
+	var p = document.login.password.value;
+	// Voucher codes: the code alone logs in (its password is the code).
+	if (!p) p = document.login.username.value;
+	document.sendin.username.value = document.login.username.value;
+	document.sendin.password.value = hexMD5('$(chap-id)' + utf8Bytes(p) + '$(chap-challenge)');
+	document.sendin.submit();
+	return false;
+}
+</script>
+$(endif)
+<main class="main">
+	<div class="wrap">
+		<form name="login" action="$(link-login-only)" method="post" $(if chap-id)onsubmit="return doLogin()"$(endif)>
+			<input type="hidden" name="dst" value="$(link-orig)">
+			<input type="hidden" name="popup" value="true">
+
+			<img class="logo" src="img/logo.svg" alt="OpenWrt">
+
+			<p class="info $(if error)alert$(endif)">
+				$(if error)$(error)$(else)Please log in to use the internet hotspot service$(endif)
+				$(if trial == 'yes')<br>Free trial available, <a href="$(link-login-only)?dst=$(link-orig-esc)&amp;trial=yes">click here</a>.$(endif)
+			</p>
+
+			<label>
+				<img class="ico" src="img/user.svg" alt="">
+				<input name="username" type="text" value="$(username)" placeholder="Username or voucher code" autocomplete="username" autocapitalize="off">
+			</label>
+
+			<label>
+				<img class="ico" src="img/password.svg" alt="">
+				<input name="password" type="password" placeholder="Password" autocomplete="current-password">
+			</label>
+
+			<input type="submit" value="Connect">
+		</form>
+		<p class="info bt">Powered by <a href="https://openwrt.org/">OpenWrt</a> &middot; <a href="https://github.com/usamakkhan/wrt-hotspot">WrtHotspot</a></p>
+	</div>
+</main>
+</body>
+</html>

@@ -1,0 +1,155 @@
+/* WrtHotspot "classic" login pages: a full-screen gradient with a centered
+   column, in the spirit of RouterOS's stock hotspot page. Themes: default,
+   body.lite, body.dark. */
+
+* { box-sizing: border-box; }
+
+html, body {
+	margin: 0;
+	min-height: 100%;
+	font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font-size: 16px;
+	color: #fff;
+}
+
+body {
+	background-color: #1d4f73;
+	background-image:
+		radial-gradient(circle at 15% 10%, rgba(255, 255, 255, .22), rgba(255, 255, 255, 0) 45%),
+		linear-gradient(160deg, #00a3e0 0%, #1d4f73 55%, #0f2a3f 100%);
+	background-attachment: fixed;
+}
+
+a { color: #bfe9ff; }
+
+.main {
+	min-height: 100vh;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px 16px;
+}
+
+.wrap {
+	width: 100%;
+	max-width: 320px;
+	text-align: center;
+	animation: fadein .6s ease-out;
+}
+
+@keyframes fadein { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+.logo {
+	display: block;
+	width: 210px;
+	max-width: 80%;
+	margin: 0 auto 28px;
+}
+
+.info {
+	margin: 0 0 24px;
+	line-height: 1.5;
+	font-size: 15px;
+	opacity: .95;
+}
+
+.info.alert {
+	padding: 10px 12px;
+	border-radius: 6px;
+	background: rgba(220, 53, 69, .85);
+	opacity: 1;
+}
+
+.info.bt {
+	margin: 28px 0 0;
+	font-size: 12px;
+	opacity: .75;
+}
+
+label {
+	position: relative;
+	display: block;
+	margin-bottom: 12px;
+}
+
+.ico {
+	position: absolute;
+	left: 14px;
+	top: 50%;
+	width: 16px;
+	height: 16px;
+	transform: translateY(-50%);
+	opacity: .8;
+}
+
+input[type=text], input[type=password] {
+	width: 100%;
+	height: 44px;
+	padding: 0 14px 0 42px;
+	border: 1px solid rgba(255, 255, 255, .35);
+	border-radius: 6px;
+	background: rgba(255, 255, 255, .12);
+	color: #fff;
+	font-size: 16px;
+	outline: none;
+}
+
+input[type=text]::placeholder, input[type=password]::placeholder { color: rgba(255, 255, 255, .7); }
+
+input[type=text]:focus, input[type=password]:focus {
+	border-color: #fff;
+	background: rgba(255, 255, 255, .2);
+}
+
+input[type=submit], .button {
+	display: block;
+	width: 100%;
+	height: 44px;
+	margin-top: 8px;
+	border: 0;
+	border-radius: 6px;
+	background: #fff;
+	color: #1d4f73;
+	font-size: 16px;
+	font-weight: 600;
+	line-height: 44px;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+input[type=submit]:hover, .button:hover { background: #e6f6ff; }
+
+.button.ghost {
+	background: transparent;
+	border: 1px solid rgba(255, 255, 255, .6);
+	color: #fff;
+}
+
+table {
+	width: 100%;
+	margin: 0 0 20px;
+	border-collapse: collapse;
+	text-align: left;
+	font-size: 14px;
+}
+
+td { padding: 7px 4px; border-bottom: 1px solid rgba(255, 255, 255, .2); }
+td:first-child { opacity: .8; white-space: nowrap; }
+.wrapword { word-break: break-all; }
+
+/* Lite: light background, dark text. */
+body.lite { color: #1d2b36; background: #eef3f7; }
+body.lite a { color: #00749e; }
+body.lite input[type=text], body.lite input[type=password] {
+	color: #1d2b36; background: #fff; border-color: #c7d3dc;
+}
+body.lite input::placeholder { color: #7a8a96; }
+body.lite .ico { filter: invert(1); }
+body.lite .logo { filter: invert(.85); }
+body.lite input[type=submit], body.lite .button { background: #00a3e0; color: #fff; }
+body.lite .button.ghost { background: transparent; color: #00749e; border-color: #00a3e0; }
+body.lite td { border-color: #d7e0e6; }
+
+/* Dark: near-black background. */
+body.dark { background: #15191d; }
+body.dark input[type=submit], body.dark .button { background: #00a3e0; color: #fff; }

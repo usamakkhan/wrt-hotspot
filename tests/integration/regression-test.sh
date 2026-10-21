@@ -89,6 +89,13 @@ t_user() { login T-account pw2 && wrthotspot sessions | grep -q 'T-account'; }
 check "a user called T-... logs in as itself" t_user
 logout_client
 wrthotspot user del T-account >/dev/null
+# MikroTik's stock trial link: username=T-<the client's MAC>, no password.
+# Either a trial starts or the used-up trial is refused; never a PAP login.
+mt_trial() { ccurl "$P/login?username=T-02%3A00%3A00%3A00%3A99%3A10" | grep -qE 'You are connected|free trial used up'; }
+check "MikroTik trial link (username=T-<mac>) is a trial request" mt_trial
+logout_client
+other_mac() { ccurl "$P/login?username=T-02%3A00%3A00%3A00%3A99%3A11" | grep -qE 'You are connected|free trial'; }
+check_not "T-<another MAC> is not a trial request" other_mac
 
 echo "== limits"
 wrthotspot user set regr limit_bytes_total=1 >/dev/null
