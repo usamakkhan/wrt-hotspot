@@ -3,6 +3,7 @@
 		"description": "Grant access to the WrtHotspot captive portal",
 		"read": {
 			"ubus": {
+				"luci-rpc": [ "getDHCPLeases" ],
 				"wrthotspot": [ "status", "sessions", "hosts", "cookies", "user_list", "user_get", "check",
 					"pages_list", "pages_files", "pages_read" ]
 			},

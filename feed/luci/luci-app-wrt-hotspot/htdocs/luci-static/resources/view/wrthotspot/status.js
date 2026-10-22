@@ -3,7 +3,32 @@
 'require poll';
 'require ui';
 'require dom';
+'require rpc';
 'require tools.wrthotspot as hs';
+
+var callDHCPLeases = rpc.declare({ object: 'luci-rpc', method: 'getDHCPLeases' });
+
+function dhcpHostnames(leases) {
+	var byMac = Object.create(null);
+	var byIPv6 = Object.create(null);
+
+	(leases.dhcp_leases || []).forEach(function(lease) {
+		if (lease.hostname && lease.hostname != '*' && lease.macaddr)
+			byMac[String(lease.macaddr).toLowerCase()] = lease.hostname;
+	});
+
+	(leases.dhcp6_leases || []).forEach(function(lease) {
+		if (!lease.hostname || lease.hostname == '*')
+			return;
+
+		var addresses = lease.ip6addrs || (lease.ip6addr ? [ lease.ip6addr ] : []);
+		addresses.forEach(function(address) {
+			byIPv6[String(address).split('/')[0].toLowerCase()] = lease.hostname;
+		});
+	});
+
+	return { byMac: byMac, byIPv6: byIPv6 };
+}
 
 function cell(content, cls) {
 	return E('td', { 'class': 'td' + (cls ? ' ' + cls : '') }, content);
@@ -17,7 +42,8 @@ function header(titles) {
 
 return view.extend({
 	load: function() {
-		return Promise.all([ hs.status(), hs.sessions(), hs.hosts(), hs.cookies() ]);
+		return Promise.all([ hs.status(), hs.sessions(), hs.hosts(), hs.cookies(),
+			L.resolveDefault(callDHCPLeases(), {}) ]);
 	},
 
 	logout: function(s, ev) {
@@ -84,10 +110,21 @@ return view.extend({
 		}, this));
 	},
 
-	hostRows: function(hosts) {
+	hostRows: function(hosts, leases) {
+		var names = dhcpHostnames(leases || {});
+
 		return hosts.map(function(h) {
+			var hostname = names.byMac[String(h.mac || '').toLowerCase()];
+
+			if (!hostname)
+				(h.ipv6 || []).some(function(address) {
+					hostname = names.byIPv6[String(address).split('/')[0].toLowerCase()];
+					return !!hostname;
+				});
+
 			return [
 				hs.h(h.mac),
+				hs.h(hostname || '-'),
 				h.authorized ? E('span', { 'class': 'label success' }, _('logged in')) : _('not logged in'),
 				hs.h(h.server || '-'),
 				hs.h(h.dev || '-'),
@@ -118,7 +155,7 @@ return view.extend({
 		return this.load().then(L.bind(function(data) {
 			dom.content(document.getElementById('hs-summary'), this.renderSummary(data[0] || {}));
 			cbi_update_table('#hs-sessions', this.sessionRows(data[1] || []), E('em', _('No active sessions')));
-			cbi_update_table('#hs-hosts', this.hostRows(data[2] || []), E('em', _('No hosts seen')));
+			cbi_update_table('#hs-hosts', this.hostRows(data[2] || [], data[4]), E('em', _('No hosts seen')));
 			cbi_update_table('#hs-cookies', this.cookieRows(data[3] || {}), E('em', _('No cookies')));
 		}, this));
 	},
@@ -138,7 +175,7 @@ return view.extend({
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', _('Hosts')),
 				E('table', { 'class': 'table', 'id': 'hs-hosts' }, [
-					header([ _('MAC'), _('State'), _('Server'), _('Device'), _('IPv4'), _('IPv6') ])
+					header([ _('MAC'), _('DHCP hostname'), _('State'), _('Server'), _('Device'), _('IPv4'), _('IPv6') ])
 				])
 			]),
 			E('div', { 'class': 'cbi-section' }, [
@@ -152,7 +189,7 @@ return view.extend({
 		requestAnimationFrame(L.bind(function() {
 			dom.content(document.getElementById('hs-summary'), this.renderSummary(data[0] || {}));
 			cbi_update_table('#hs-sessions', this.sessionRows(data[1] || []), E('em', _('No active sessions')));
-			cbi_update_table('#hs-hosts', this.hostRows(data[2] || []), E('em', _('No hosts seen')));
+			cbi_update_table('#hs-hosts', this.hostRows(data[2] || [], data[4]), E('em', _('No hosts seen')));
 			cbi_update_table('#hs-cookies', this.cookieRows(data[3] || {}), E('em', _('No cookies')));
 		}, this));
 
