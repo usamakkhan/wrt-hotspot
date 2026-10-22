@@ -2,7 +2,7 @@
 
 WrtHotspot is a dual-stack captive portal for OpenWrt 24.10 and 25.12. It provides local users and vouchers, a LuCI configuration app, an optional staff panel, optional RADIUS integration and per-user traffic shaping. It is inspired by MikroTik Hotspot and supports compatible page templates and selected billing interfaces.
 
-**Current version:** 0.10.1. CI builds and tests packages on OpenWrt x86; version 0.9.0 also passed tests on emulated MIPS and ARM routers. Physical routers and real Wi-Fi captive-portal assistants still need end-to-end testing. See [qualification](docs/qualification.md) for exact environments and results.
+**Current version:** 0.10.2. CI builds and tests packages on OpenWrt x86; version 0.9.0 also passed tests on emulated MIPS and ARM routers. Physical routers and real Wi-Fi captive-portal assistants still need end-to-end testing. See [qualification](docs/qualification.md) for exact environments and results.
 
 - [Releases](https://github.com/usamakkhan/wrt-hotspot/releases) and [issues](https://github.com/usamakkhan/wrt-hotspot/issues)
 - [Architecture](docs/architecture.md)

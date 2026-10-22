@@ -2,6 +2,19 @@
 
 This file records released changes. For installation, see the [README](README.md); for test environments and measurements, see [qualification](docs/qualification.md).
 
+## 0.10.2 - 2026-10-21
+
+### LuCI
+
+- Show DHCP hostnames in the Hosts table and identify bypassed devices in both Hosts and Active sessions. Bypassed rows are clearly labeled and have no logout action or login counters.
+- Let administrators reveal a local user's password from the Users page.
+- Improve Status and Users page responsiveness and refresh behavior.
+- Refresh the LuCI layout with clearer spacing, overview cards, scrollable tables and a compact tab row.
+
+### Verified
+
+CI lint, unit tests and package builds passed on OpenWrt 24.10.8 and 25.12.6. The bypass display has not yet been tested on a physical router.
+
 ## 0.10.1 - 2026-10-21
 
 - Direct `/cgi-bin/luci` visits from hotspot clients now go to the hotspot login or status page. The `/admin/` shortcut continues to open router settings, and devices outside the hotspot keep the standard LuCI URL.

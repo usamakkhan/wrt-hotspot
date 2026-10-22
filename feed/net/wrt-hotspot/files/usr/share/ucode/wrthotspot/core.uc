@@ -64,7 +64,7 @@ function load_rosapi() {
 	}
 }
 
-export const VERSION = '0.10.1';
+export const VERSION = '0.10.2';
 
 // MikroTik / RADIUS terminate causes.
 export const CAUSE = {

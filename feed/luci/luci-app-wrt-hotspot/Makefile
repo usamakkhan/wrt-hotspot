@@ -5,7 +5,7 @@ LUCI_DEPENDS:=+wrt-hotspot +luci-base
 LUCI_PKGARCH:=all
 LUCI_URL:=https://github.com/usamakkhan/wrt-hotspot
 
-PKG_VERSION:=0.10.1
+PKG_VERSION:=0.10.2
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-or-later
 PKG_MAINTAINER:=Usama Khan
