@@ -341,6 +341,17 @@ export function publish(conn, core) {
 			},
 		},
 
+		user_password: {
+			args: { name: '' },
+			call: function(req) {
+				if (!is_admin(req))
+					return err('admin access required');
+
+				let u = core.users().get(req.args.name);
+				return u ? { ok: true, password: u.password ?? '' } : err('no such user');
+			},
+		},
+
 		user_set: {
 			args: USER_ARGS,
 			call: function(req) {

@@ -102,6 +102,9 @@ check "batch records the operator" ub_has voucher_batches '{}' '"created_by": "s
 check "operator: may list sessions" rpc_ok "$sid" wrthotspot sessions '{}'
 check "operator: may read reports" rpc_ok "$sid" wrthotspot report '{}'
 check "operator: may manage users" rpc_has "$sid" wrthotspot user_set '{"name":"panel-made","password":"pw123456","profile":"default"}' '"ok":true'
+check_not "user_get hides passwords" ub_has user_get '{"name":"panel-made"}' '"password"'
+check "local admin may view a user password" [ "$(ub_val user_password '{"name":"panel-made"}' '@.password')" = pw123456 ]
+check_not "operator cannot view user passwords" rpc_ok "$sid" wrthotspot user_password '{"name":"panel-made"}'
 check_not "operator: no operator management" rpc_ok "$sid" wrthotspot operator_list '{}'
 check_not "operator: no UCI access" rpc_ok "$sid" uci get '{"config":"wrthotspot"}'
 check_not "operator: no flush" rpc_ok "$sid" wrthotspot flush '{}'

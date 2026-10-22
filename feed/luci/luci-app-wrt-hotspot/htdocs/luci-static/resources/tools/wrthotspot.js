@@ -11,6 +11,7 @@ var callCookies = rpc.declare({ object: 'wrthotspot', method: 'cookies' });
 var callLogout = rpc.declare({ object: 'wrthotspot', method: 'logout', params: [ 'mac', 'user', 'id', 'cause' ] });
 // Paged: { users, total, offset }.
 var callUsers = rpc.declare({ object: 'wrthotspot', method: 'user_list', params: [ 'offset', 'limit', 'search' ] });
+var callUserPassword = rpc.declare({ object: 'wrthotspot', method: 'user_password', params: [ 'name' ] });
 var callUserSet = rpc.declare({
 	object: 'wrthotspot', method: 'user_set',
 	params: [ 'name', 'password', 'profile', 'server', 'mac', 'limit_uptime', 'limit_bytes_in',
@@ -74,6 +75,7 @@ return baseclass.extend({
 	cookies: callCookies,
 	logout: callLogout,
 	users: callUsers,
+	userPassword: callUserPassword,
 	userSet: callUserSet,
 	userRemove: callUserRemove,
 	userReset: callUserReset,

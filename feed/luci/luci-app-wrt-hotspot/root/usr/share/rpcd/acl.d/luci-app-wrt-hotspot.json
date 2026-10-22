@@ -4,7 +4,7 @@
 		"read": {
 			"ubus": {
 				"luci-rpc": [ "getDHCPLeases" ],
-				"wrthotspot": [ "status", "sessions", "hosts", "cookies", "user_list", "user_get", "check",
+				"wrthotspot": [ "status", "sessions", "hosts", "cookies", "user_list", "user_get", "user_password", "check",
 					"pages_list", "pages_files", "pages_read" ]
 			},
 			"uci": [ "wrthotspot", "network", "firewall", "dhcp" ]

@@ -88,11 +88,26 @@ return view.extend({
 				hs.h(u.comment || ''),
 				E('div', { 'class': 'nowrap' }, [
 					E('button', { 'class': 'btn cbi-button-edit', 'click': ui.createHandlerFn(this, 'edit', u) }, _('Edit')), ' ',
+					E('button', { 'class': 'btn', 'click': ui.createHandlerFn(this, 'viewPassword', u) }, _('View password')), ' ',
 					E('button', { 'class': 'btn cbi-button', 'click': ui.createHandlerFn(this, 'reset', u) }, _('Reset counters')), ' ',
 					E('button', { 'class': 'btn cbi-button-remove', 'click': ui.createHandlerFn(this, 'remove', u) }, _('Delete'))
 				])
 			];
 		}, this));
+	},
+
+	viewPassword: function(u) {
+		return hs.userPassword(u.name).then(function(res) {
+			if (!res || res.ok !== true)
+				return ui.addNotification(null, E('p', {}, hs.h(res && res.error ? res.error : _('Unable to read password'))), 'danger');
+
+			ui.showModal(_('Password for %s').format(hs.h(u.name)), [
+				E('p', {}, [ E('code', {}, hs.h(res.password || _('(empty)'))) ]),
+				E('div', { 'class': 'right' }, [
+					E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Close'))
+				])
+			]);
+		});
 	},
 
 	edit: function(u) {
