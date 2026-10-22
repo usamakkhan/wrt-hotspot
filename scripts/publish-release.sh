@@ -9,8 +9,9 @@
 #    (or replaces its files when it exists already);
 # 3. uploads the same packages and indexes into every older release, so a
 #    router set up with an older, versioned feed URL sees the update too, and
-#    puts a "superseded" note on top of those releases;
-# 4. downloads the indexes again from every feed URL and checks the version.
+#    puts a "superseded" note on top of those releases. For a signing-key
+#    rotation, WRTHOTSPOT_ROTATE_KEYS=1 leaves older feeds untouched instead;
+# 4. downloads the indexes again from every updated feed URL and checks them.
 #
 # Needs the GitHub CLI logged in (GH=/path/to/gh if it is not on PATH) and
 # curl. Build dist/ first with scripts/build-packages.sh <release>.
@@ -78,14 +79,18 @@ done
 BANNER="> **Superseded by [$V](https://github.com/$REPO/releases/tag/$TAG).** This release's feed URL also serves $V, so routers set up with it get the update with \`apk upgrade\` / \`opkg upgrade\`. New installs should use the \`releases/latest/download/\` URLs from the [README](https://github.com/$REPO#install)."
 TMP=$(mktemp)
 
-for old in $("$GH" release list --limit 100 --json tagName -q '.[].tagName'); do
-	[ "$old" = "$TAG" ] && continue
-	echo "== $old: feed -> $V"
-	"$GH" release upload "$old" $FEED_FILES --clobber
-	# Replace an earlier "Superseded" note, keep the rest of the notes.
-	{ echo "$BANNER"; echo; "$GH" release view "$old" --json body -q .body | sed '/^> \*\*Superseded by/,/^$/d'; } > "$TMP"
-	"$GH" release edit "$old" --notes-file "$TMP"
-done
+if [ "${WRTHOTSPOT_ROTATE_KEYS:-0}" = 1 ]; then
+	echo "== signing keys changed: older versioned feeds remain unchanged"
+else
+	for old in $("$GH" release list --limit 100 --json tagName -q '.[].tagName'); do
+		[ "$old" = "$TAG" ] && continue
+		echo "== $old: feed -> $V"
+		"$GH" release upload "$old" $FEED_FILES --clobber
+		# Replace an earlier "Superseded" note, keep the rest of the notes.
+		{ echo "$BANNER"; echo; "$GH" release view "$old" --json body -q .body | sed '/^> \*\*Superseded by/,/^$/d'; } > "$TMP"
+		"$GH" release edit "$old" --notes-file "$TMP"
+	done
+fi
 rm -f "$TMP"
 
 # --- 4. check what routers will download ---------------------------------------------
@@ -106,8 +111,12 @@ check() {	# check <base url>
 }
 echo "== feed URLs"
 check "https://github.com/$REPO/releases/latest/download"
-for t in $("$GH" release list --limit 100 --json tagName -q '.[].tagName'); do
-	check "https://github.com/$REPO/releases/download/$t"
-done
-[ $fail = 0 ] && echo "== every feed URL serves $V"
+if [ "${WRTHOTSPOT_ROTATE_KEYS:-0}" = 1 ]; then
+	check "https://github.com/$REPO/releases/download/$TAG"
+else
+	for t in $("$GH" release list --limit 100 --json tagName -q '.[].tagName'); do
+		check "https://github.com/$REPO/releases/download/$t"
+	done
+fi
+[ $fail = 0 ] && echo "== updated feed URLs serve $V"
 exit $fail

@@ -2,7 +2,9 @@
 
 This file records released changes. For installation, see the [README](README.md); for test environments and measurements, see [qualification](docs/qualification.md).
 
-## 0.10.2 - 2026-10-21
+## 0.10.2 - 2026-10-22
+
+**Signing-key change:** The release is built on a new Ubuntu build machine with new feed signing keys. Existing routers must [install the new public key](docs/upgrades.md#version-0102-signing-key-change) before using the latest feed. Older versioned feed URLs remain on 0.10.1.
 
 ### LuCI
 

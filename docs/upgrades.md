@@ -26,4 +26,28 @@ An active-session checkpoint normally lives under `/tmp/wrthotspot`; a firmware 
 
 ## Release feeds and signing keys
 
-The project's release process refreshes older versioned feed URLs to serve the newest packages. A URL containing an old release tag is therefore not an archive of those package bytes. Keep a separate copy of the old feed when a reproducible rollback is required. Feed signing keys must stay consistent across routine package releases; if a key changes, routers must be configured to trust the new public key.
+Routine releases refresh older versioned feed URLs to serve the newest packages. Version 0.10.2 is an exception because its signing keys changed: older versioned URLs remain on 0.10.1, so routers using the old keys can still update their existing feed. Keep a separate copy of a feed when a reproducible rollback is required.
+
+## Version 0.10.2 signing-key change
+
+Install the new public key before updating the package index. The old key may remain installed while you migrate. If your feed URL contains an older tag such as `v0.10.1`, change that URL to `releases/latest/download` to receive 0.10.2; otherwise it will continue serving 0.10.1.
+
+On OpenWrt 25.12 (apk):
+
+```sh
+wget -O /tmp/wrthotspot-new.pem https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.10.2/wrthotspot.pem
+cp /tmp/wrthotspot-new.pem /etc/apk/keys/wrthotspot.pem
+apk update
+apk upgrade
+```
+
+On OpenWrt 24.10 (opkg):
+
+```sh
+wget -O /tmp/wrthotspot-new.pub https://github.com/usamakkhan/wrt-hotspot/releases/download/v0.10.2/fe4302d5107a252b
+opkg-key add /tmp/wrthotspot-new.pub
+opkg update
+opkg upgrade
+```
+
+The new public keys have SHA-256 hashes `9b341769fa2114b3f84ab0fe0612f2d04d86c66780a6244a58a2f6f3da5ccfe0` (apk) and `828a0306587e2d51d3ebbbb57118b913bb338720de43bf15100cadee059eb681` (opkg). You can compare the downloaded file with the appropriate hash using `sha256sum` before installing it.
