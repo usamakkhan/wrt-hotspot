@@ -66,7 +66,7 @@ return view.extend({
 		var shaper = { tc: _('tc HTB shaping'), nft: _('nftables policing'), off: _('off') }[st.shaper] || '-';
 
 		var tiles = [
-			[ _('Active sessions'), st.sessions ],
+			[ _('Active sessions'), st.active != null ? st.active : st.sessions ],
 			[ _('Hosts'), st.hosts ],
 			[ _('Local users'), st.users ],
 			[ _('Hotspot servers'), devs.length ? devs.join(', ') : _('none active') ],
@@ -87,6 +87,17 @@ return view.extend({
 
 	sessionRows: function(sessions) {
 		return sessions.map(L.bind(function(s) {
+			if (s.kind == 'bypassed')
+				return [
+					E('span', { 'class': 'label success' }, _('Bypassed')),
+					hs.h(s.mac),
+					hs.h((s.ipv4 || []).join(', ') || '-'),
+					E('span', { 'title': (s.ipv6 || []).join('\n') }, (s.ipv6 || []).length ? _('%d addr.').format(s.ipv6.length) : '-'),
+					hs.h(s.server || '-'),
+					_('IP binding'),
+					hs.fmtDuration(s.uptime), '-', '-', '-', '-'
+				];
+
 			var left = (s.session_time_left != null) ? hs.fmtDuration(s.session_time_left) : '∞';
 			var rate = s.rate_limit || '-';
 
@@ -124,7 +135,8 @@ return view.extend({
 			return [
 				hs.h(h.mac),
 				hs.h(hostname || '-'),
-				h.authorized ? E('span', { 'class': 'label success' }, _('logged in')) : _('not logged in'),
+				h.authorized ? E('span', { 'class': 'label success' }, _('logged in')) :
+					h.bypassed ? E('span', { 'class': 'label success' }, _('bypassed')) : _('not logged in'),
 				hs.h(h.server || '-'),
 				hs.h(h.dev || '-'),
 				hs.h((h.ipv4 || []).join(', ') || '-'),
@@ -183,7 +195,7 @@ return view.extend({
 		var sessionOffset = this.sessionOffset;
 		var hostOffset = this.hostOffset;
 
-		return Promise.all([ status || hs.status(), hs.sessions(sessionOffset, PAGE_SIZE, ''),
+		return Promise.all([ status || hs.status(), hs.active(sessionOffset, PAGE_SIZE, ''),
 			hs.hosts(hostOffset, PAGE_SIZE, ''), hs.cookies(),
 			L.resolveDefault(callDHCPLeases(), {}) ]).then(L.bind(function(data) {
 			if (seq !== this.refreshSeq)
@@ -194,7 +206,7 @@ return view.extend({
 			var hosts = data[2] || [];
 			if ((!sessions.length && sessionOffset > 0) || (!hosts.length && hostOffset > 0)) {
 				if (!sessions.length && sessionOffset > 0)
-					this.sessionOffset = Math.max(0, Math.ceil((summary.sessions || 0) / PAGE_SIZE) - 1) * PAGE_SIZE;
+					this.sessionOffset = Math.max(0, Math.ceil((summary.active || 0) / PAGE_SIZE) - 1) * PAGE_SIZE;
 				if (!hosts.length && hostOffset > 0)
 					this.hostOffset = Math.max(0, Math.ceil((summary.hosts || 0) / PAGE_SIZE) - 1) * PAGE_SIZE;
 				if (this.sessionOffset !== sessionOffset || this.hostOffset !== hostOffset)
@@ -203,11 +215,11 @@ return view.extend({
 
 			dom.content(document.getElementById('hs-summary'), this.renderSummary(summary));
 			cbi_update_table('#hs-sessions', this.sessionRows(sessions), E('em', _('No active sessions')));
-			this.pageControls('hs-sessions', sessionOffset, sessions.length, summary.sessions || 0);
+			this.pageControls('hs-sessions', sessionOffset, sessions.length, summary.active || 0);
 
 			var leases = data[4] || {};
 			var hostKey = JSON.stringify([
-				hosts.map(function(h) { return [ h.mac, h.authorized, h.server, h.dev, h.ipv4, h.ipv6 ]; }),
+				hosts.map(function(h) { return [ h.mac, h.authorized, h.bypassed, h.server, h.dev, h.ipv4, h.ipv6 ]; }),
 				(leases.dhcp_leases || []).map(function(l) { return [ l.macaddr, l.hostname ]; }),
 				(leases.dhcp6_leases || []).map(function(l) { return [ l.ip6addr, l.ip6addrs, l.hostname ]; })
 			]);
@@ -226,7 +238,7 @@ return view.extend({
 		this.hostOffset = 0;
 		var view = E('div', {}, [
 			E('h2', _('Hotspot')),
-			E('div', { 'class': 'cbi-map-descr' }, _('Live state of the captive portal: logged-in sessions (MikroTik "active"), every device seen on hotspot interfaces ("hosts") and remembered logins ("cookies").')),
+			E('div', { 'class': 'cbi-map-descr' }, _('Live state of the captive portal: logged-in and bypassed devices in Active sessions, every device seen on hotspot interfaces in Hosts, and remembered logins in Cookies. Bypassed devices do not have login counters or a logout action.')),
 			E('div', { 'class': 'cbi-section' }, [ E('h3', _('Overview')), E('div', { 'id': 'hs-summary' }) ]),
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', _('Active sessions')),

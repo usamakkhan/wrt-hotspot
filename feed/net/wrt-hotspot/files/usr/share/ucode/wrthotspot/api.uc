@@ -94,6 +94,7 @@ export function publish(conn, core) {
 					version: VERSION,
 					devices: core.devices(),
 					sessions: core.session_count(),
+					active: length(core.active()),
 					hosts: core.host_count(),
 					users: core.users().count(),
 					...core.runtime(),
@@ -172,6 +173,14 @@ export function publish(conn, core) {
 			call: function(req) {
 				let p = page(core.sessions(), req.args, (s) => `${s.user} ${s.mac} ${join(' ', s.ipv4)} ${s.id}`);
 				return { sessions: p.items, total: p.total, offset: p.offset };
+			},
+		},
+
+		active: {
+			args: PAGE_ARGS,
+			call: function(req) {
+				let p = page(core.active(), req.args, (s) => `${s.user ?? ''} ${s.mac} ${join(' ', s.ipv4)} ${s.id ?? ''}`);
+				return { active: p.items, total: p.total, offset: p.offset };
 			},
 		},
 

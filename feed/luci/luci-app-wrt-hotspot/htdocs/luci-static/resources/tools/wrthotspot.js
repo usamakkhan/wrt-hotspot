@@ -6,6 +6,7 @@
 
 var callStatus = rpc.declare({ object: 'wrthotspot', method: 'status' });
 var callSessions = rpc.declare({ object: 'wrthotspot', method: 'sessions', params: [ 'offset', 'limit', 'search' ], expect: { sessions: [] } });
+var callActive = rpc.declare({ object: 'wrthotspot', method: 'active', params: [ 'offset', 'limit', 'search' ], expect: { active: [] } });
 var callHosts = rpc.declare({ object: 'wrthotspot', method: 'hosts', params: [ 'offset', 'limit', 'search' ], expect: { hosts: [] } });
 var callCookies = rpc.declare({ object: 'wrthotspot', method: 'cookies' });
 var callLogout = rpc.declare({ object: 'wrthotspot', method: 'logout', params: [ 'mac', 'user', 'id', 'cause' ] });
@@ -71,6 +72,7 @@ function parseRateLimit(s) {
 return baseclass.extend({
 	status: callStatus,
 	sessions: callSessions,
+	active: callActive,
 	hosts: callHosts,
 	cookies: callCookies,
 	logout: callLogout,

@@ -11,6 +11,7 @@ import * as shaper from 'wrthotspot.shaper';
 import * as sched from 'wrthotspot.limits';
 import * as users_db from 'wrthotspot.users';
 import * as hosts_mod from 'wrthotspot.hosts';
+import * as binding from 'wrthotspot.binding';
 import * as records_mod from 'wrthotspot.records';
 import * as capacity from 'wrthotspot.capacity';
 import { list as operators_list } from 'wrthotspot.operators';
@@ -774,9 +775,26 @@ export function create(opts) {
 
 	self.session_count = () => length(keys(sessions));
 	self.host_count = () => hosts.count();
+	self.active = function() {
+		let rows = self.sessions();
+
+		for (let h in hosts.list()) {
+			if (by_mac[h.mac] || !binding.bypassed(h, cfg.ip_bindings))
+				continue;
+
+			push(rows, {
+				kind: 'bypassed', mac: h.mac, server: h.server,
+				ipv4: h.ipv4, ipv6: h.ipv6,
+				started: h.first_seen, uptime: max(0, time() - h.first_seen),
+			});
+		}
+
+		return rows;
+	};
 
 	self.hosts = function() {
-		return map(hosts.list(), (h) => ({ ...h, authorized: !!by_mac[h.mac] }));
+		return map(hosts.list(), (h) => ({ ...h, authorized: !!by_mac[h.mac],
+			bypassed: !by_mac[h.mac] && binding.bypassed(h, cfg.ip_bindings) }));
 	};
 
 	self.cookies = function() {
