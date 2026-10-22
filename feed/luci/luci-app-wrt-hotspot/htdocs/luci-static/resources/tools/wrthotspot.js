@@ -5,8 +5,8 @@
 /* RPC to hotspotd (ubus object "wrthotspot") */
 
 var callStatus = rpc.declare({ object: 'wrthotspot', method: 'status' });
-var callSessions = rpc.declare({ object: 'wrthotspot', method: 'sessions', expect: { sessions: [] } });
-var callHosts = rpc.declare({ object: 'wrthotspot', method: 'hosts', expect: { hosts: [] } });
+var callSessions = rpc.declare({ object: 'wrthotspot', method: 'sessions', params: [ 'offset', 'limit', 'search' ], expect: { sessions: [] } });
+var callHosts = rpc.declare({ object: 'wrthotspot', method: 'hosts', params: [ 'offset', 'limit', 'search' ], expect: { hosts: [] } });
 var callCookies = rpc.declare({ object: 'wrthotspot', method: 'cookies' });
 var callLogout = rpc.declare({ object: 'wrthotspot', method: 'logout', params: [ 'mac', 'user', 'id', 'cause' ] });
 // Paged: { users, total, offset }.

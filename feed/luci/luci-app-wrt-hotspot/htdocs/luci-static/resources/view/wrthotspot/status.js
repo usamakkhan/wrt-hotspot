@@ -7,6 +7,7 @@
 'require tools.wrthotspot as hs';
 
 var callDHCPLeases = rpc.declare({ object: 'luci-rpc', method: 'getDHCPLeases' });
+var PAGE_SIZE = 100;
 
 function dhcpHostnames(leases) {
 	var byMac = Object.create(null);
@@ -42,8 +43,7 @@ function header(titles) {
 
 return view.extend({
 	load: function() {
-		return Promise.all([ hs.status(), hs.sessions(), hs.hosts(), hs.cookies(),
-			L.resolveDefault(callDHCPLeases(), {}) ]);
+		return hs.status();
 	},
 
 	logout: function(s, ev) {
@@ -151,16 +151,80 @@ return view.extend({
 		return rows;
 	},
 
-	refresh: function() {
-		return this.load().then(L.bind(function(data) {
-			dom.content(document.getElementById('hs-summary'), this.renderSummary(data[0] || {}));
-			cbi_update_table('#hs-sessions', this.sessionRows(data[1] || []), E('em', _('No active sessions')));
-			cbi_update_table('#hs-hosts', this.hostRows(data[2] || [], data[4]), E('em', _('No hosts seen')));
+	pageControls: function(prefix, offset, shown, total) {
+		var range = document.getElementById(prefix + '-range');
+		var previous = document.getElementById(prefix + '-previous');
+		var next = document.getElementById(prefix + '-next');
+
+		range.textContent = total ? _('%d-%d of %d').format(offset + 1, offset + shown, total) : _('No entries');
+		previous.disabled = offset === 0;
+		next.disabled = !shown || offset + shown >= total;
+	},
+
+	pageButtons: function(prefix, field) {
+		var previous = E('button', { 'id': prefix + '-previous', 'class': 'btn', 'disabled': '' }, _('Previous'));
+		var next = E('button', { 'id': prefix + '-next', 'class': 'btn', 'disabled': '' }, _('Next'));
+
+		previous.addEventListener('click', L.bind(function() {
+			this[field] = Math.max(0, this[field] - PAGE_SIZE);
+			return this.refresh();
+		}, this));
+		next.addEventListener('click', L.bind(function() {
+			this[field] += PAGE_SIZE;
+			return this.refresh();
+		}, this));
+
+		return E('div', { 'class': 'cbi-value' }, [
+			previous, ' ', E('span', { 'id': prefix + '-range' }, _('Loading…')), ' ', next
+		]);
+	},
+
+	refresh: function(status) {
+		var seq = this.refreshSeq = (this.refreshSeq || 0) + 1;
+		var sessionOffset = this.sessionOffset;
+		var hostOffset = this.hostOffset;
+
+		return Promise.all([ status || hs.status(), hs.sessions(sessionOffset, PAGE_SIZE, ''),
+			hs.hosts(hostOffset, PAGE_SIZE, ''), hs.cookies(),
+			L.resolveDefault(callDHCPLeases(), {}) ]).then(L.bind(function(data) {
+			if (seq !== this.refreshSeq)
+				return;
+
+			var summary = data[0] || {};
+			var sessions = data[1] || [];
+			var hosts = data[2] || [];
+			if ((!sessions.length && sessionOffset > 0) || (!hosts.length && hostOffset > 0)) {
+				if (!sessions.length && sessionOffset > 0)
+					this.sessionOffset = Math.max(0, Math.ceil((summary.sessions || 0) / PAGE_SIZE) - 1) * PAGE_SIZE;
+				if (!hosts.length && hostOffset > 0)
+					this.hostOffset = Math.max(0, Math.ceil((summary.hosts || 0) / PAGE_SIZE) - 1) * PAGE_SIZE;
+				if (this.sessionOffset !== sessionOffset || this.hostOffset !== hostOffset)
+					return this.refresh(summary);
+			}
+
+			dom.content(document.getElementById('hs-summary'), this.renderSummary(summary));
+			cbi_update_table('#hs-sessions', this.sessionRows(sessions), E('em', _('No active sessions')));
+			this.pageControls('hs-sessions', sessionOffset, sessions.length, summary.sessions || 0);
+
+			var leases = data[4] || {};
+			var hostKey = JSON.stringify([
+				hosts.map(function(h) { return [ h.mac, h.authorized, h.server, h.dev, h.ipv4, h.ipv6 ]; }),
+				(leases.dhcp_leases || []).map(function(l) { return [ l.macaddr, l.hostname ]; }),
+				(leases.dhcp6_leases || []).map(function(l) { return [ l.ip6addr, l.ip6addrs, l.hostname ]; })
+			]);
+			if (hostKey !== this.hostKey) {
+				cbi_update_table('#hs-hosts', this.hostRows(hosts, leases), E('em', _('No hosts seen')));
+				this.hostKey = hostKey;
+			}
+			this.pageControls('hs-hosts', hostOffset, hosts.length, summary.hosts || 0);
+
 			cbi_update_table('#hs-cookies', this.cookieRows(data[3] || {}), E('em', _('No cookies')));
 		}, this));
 	},
 
 	render: function(data) {
+		this.sessionOffset = 0;
+		this.hostOffset = 0;
 		var view = E('div', {}, [
 			E('h2', _('Hotspot')),
 			E('div', { 'class': 'cbi-map-descr' }, _('Live state of the captive portal: logged-in sessions (MikroTik "active"), every device seen on hotspot interfaces ("hosts") and remembered logins ("cookies").')),
@@ -170,13 +234,15 @@ return view.extend({
 				E('table', { 'class': 'table', 'id': 'hs-sessions' }, [
 					header([ _('User'), _('MAC'), _('IPv4'), _('IPv6'), _('Server'), _('Login by'), _('Uptime'),
 						_('Time left'), _('Up / down'), _('Rate limit'), '' ])
-				])
+				]),
+				this.pageButtons('hs-sessions', 'sessionOffset')
 			]),
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', _('Hosts')),
 				E('table', { 'class': 'table', 'id': 'hs-hosts' }, [
 					header([ _('MAC'), _('DHCP hostname'), _('State'), _('Server'), _('Device'), _('IPv4'), _('IPv6') ])
-				])
+				]),
+				this.pageButtons('hs-hosts', 'hostOffset')
 			]),
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', _('Cookies')),
@@ -187,13 +253,11 @@ return view.extend({
 		]);
 
 		requestAnimationFrame(L.bind(function() {
-			dom.content(document.getElementById('hs-summary'), this.renderSummary(data[0] || {}));
-			cbi_update_table('#hs-sessions', this.sessionRows(data[1] || []), E('em', _('No active sessions')));
-			cbi_update_table('#hs-hosts', this.hostRows(data[2] || [], data[4]), E('em', _('No hosts seen')));
-			cbi_update_table('#hs-cookies', this.cookieRows(data[3] || {}), E('em', _('No cookies')));
+			dom.content(document.getElementById('hs-summary'), this.renderSummary(data || {}));
+			this.refresh(data);
 		}, this));
 
-		poll.add(L.bind(this.refresh, this), 5);
+		poll.add(L.bind(function() { return this.refresh(); }, this), 15);
 
 		return view;
 	},

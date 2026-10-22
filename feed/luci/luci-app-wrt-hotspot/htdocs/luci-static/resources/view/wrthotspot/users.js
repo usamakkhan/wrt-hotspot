@@ -46,18 +46,27 @@ function editValue(u, key) {
 	return String(v);
 }
 
+var PAGE_SIZE = 100;
+
 return view.extend({
 	load: function() {
-		return Promise.all([ hs.users(0, 500, ''), uci.load('wrthotspot') ]);
+		return Promise.all([ hs.users(0, PAGE_SIZE, ''), uci.load('wrthotspot') ]);
 	},
 
 	refresh: function() {
 		var q = document.getElementById('hs-user-search');
 		var my = this.seq = (this.seq || 0) + 1;	// only the newest search may draw
 
-		return hs.users(0, 500, q ? q.value.trim() : '').then(L.bind(function(r) {
+		return hs.users(this.offset || 0, PAGE_SIZE, q ? q.value.trim() : '').then(L.bind(function(r) {
 			if (my !== this.seq)
 				return;
+			if (!(r.users || []).length && this.offset > 0) {
+				var lastPage = Math.max(0, Math.ceil((r.total || 0) / PAGE_SIZE) - 1) * PAGE_SIZE;
+				if (lastPage !== this.offset) {
+					this.offset = lastPage;
+					return this.refresh();
+				}
+			}
 
 			cbi_update_table('#hs-users', this.rows(r.users || []), E('em', _('No users')));
 			this.showCount(r);
@@ -68,9 +77,14 @@ return view.extend({
 		var el = document.getElementById('hs-user-count');
 
 		if (el)
-			el.textContent = (r.total > (r.users || []).length)
-				? _('Showing %d of %d users - search to narrow down, or use the operator panel for vouchers.').format(r.users.length, r.total)
-				: _('%d users').format(r.total || 0);
+			el.textContent = r.total
+				? _('Showing %d-%d of %d users').format((this.offset || 0) + 1, (this.offset || 0) + (r.users || []).length, r.total)
+				: _('No users');
+
+		var previous = document.getElementById('hs-user-previous');
+		var next = document.getElementById('hs-user-next');
+		if (previous) previous.disabled = !(this.offset > 0);
+		if (next) next.disabled = !(r.users || []).length || (this.offset || 0) + r.users.length >= r.total;
 	},
 
 	rows: function(users) {
@@ -220,6 +234,7 @@ return view.extend({
 	},
 
 	render: function(data) {
+		this.offset = 0;
 		var table = E('table', { 'class': 'table', 'id': 'hs-users' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
 				_('Name'), _('Profile'), _('Server'), _('MAC'), _('Limits'), _('Used'), _('State'), _('Comment'), ''
@@ -232,7 +247,19 @@ return view.extend({
 		var timer = null;
 		search.addEventListener('input', L.bind(function() {
 			window.clearTimeout(timer);
+			this.offset = 0;
 			timer = window.setTimeout(L.bind(this.refresh, this), 300);
+		}, this));
+
+		var previous = E('button', { 'id': 'hs-user-previous', 'class': 'btn', 'disabled': '' }, _('Previous'));
+		var next = E('button', { 'id': 'hs-user-next', 'class': 'btn', 'disabled': '' }, _('Next'));
+		previous.addEventListener('click', L.bind(function() {
+			this.offset = Math.max(0, this.offset - PAGE_SIZE);
+			return this.refresh();
+		}, this));
+		next.addEventListener('click', L.bind(function() {
+			this.offset += PAGE_SIZE;
+			return this.refresh();
 		}, this));
 
 		var count = E('div', { 'id': 'hs-user-count', 'class': 'cbi-value-description' });
@@ -242,7 +269,7 @@ return view.extend({
 			E('h2', _('Hotspot users')),
 			E('div', { 'class': 'cbi-map-descr' }, _('Local accounts (MikroTik /ip hotspot user). Users unknown here are tried against RADIUS when a server profile uses RADIUS.')),
 			E('div', { 'class': 'cbi-section' }, [
-				search, count,
+				search, count, E('div', { 'class': 'cbi-value' }, [ previous, ' ', next ]),
 				table,
 				E('div', { 'class': 'cbi-section-create' }, [
 					E('button', { 'class': 'btn cbi-button-add', 'click': ui.createHandlerFn(this, 'edit', null) }, _('Add user'))
