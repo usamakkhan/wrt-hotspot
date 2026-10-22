@@ -91,6 +91,6 @@ return view.extend({
 		o.rows = 3;
 		o.modalonly = true;
 
-		return m.render();
+		return hs.wrap(m.render());
 	}
 });

@@ -85,6 +85,22 @@ return baseclass.extend({
 	flush: callFlush,
 	reload: callReload,
 
+	wrap: function(content) {
+		if (!document.getElementById('wrthotspot-style')) {
+			var link = document.createElement('link');
+			link.id = 'wrthotspot-style';
+			link.rel = 'stylesheet';
+			link.href = L.resource('view/wrthotspot/style.css');
+			document.head.appendChild(link);
+		}
+
+		var decorate = function(node) {
+			return E('div', { 'class': 'wrthotspot-app' }, node);
+		};
+
+		return content && typeof content.then == 'function' ? content.then(decorate) : decorate(content);
+	},
+
 	// LuCI puts string children in with innerHTML: every value that comes from
 	// users, RADIUS or the network goes through this.
 	h: function(v) {

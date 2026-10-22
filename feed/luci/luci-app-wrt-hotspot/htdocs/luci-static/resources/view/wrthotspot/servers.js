@@ -202,6 +202,6 @@ return view.extend({
 			o.modalonly = true;
 		}
 
-		return m.render();
+		return hs.wrap(m.render());
 	}
 });

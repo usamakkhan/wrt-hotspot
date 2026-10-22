@@ -70,6 +70,6 @@ return view.extend({
 		o.depends({ reset: 'never', '!reverse': true });
 		o.modalonly = true;
 
-		return m.render();
+		return hs.wrap(m.render());
 	}
 });

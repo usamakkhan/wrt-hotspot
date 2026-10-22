@@ -31,10 +31,6 @@ function dhcpHostnames(leases) {
 	return { byMac: byMac, byIPv6: byIPv6 };
 }
 
-function cell(content, cls) {
-	return E('td', { 'class': 'td' + (cls ? ' ' + cls : '') }, content);
-}
-
 function header(titles) {
 	return E('tr', { 'class': 'tr table-titles' }, titles.map(function(t) {
 		return E('th', { 'class': 'th' }, t);
@@ -81,8 +77,11 @@ return view.extend({
 		if (st.radius_backlog)
 			tiles.push([ _('Queued RADIUS accounting'), st.radius_backlog ]);
 
-		return E('table', { 'class': 'table' }, tiles.map(function(t) {
-			return E('tr', { 'class': 'tr' }, [ cell(E('strong', t[0]), 'left'), cell(String(t[1])) ]);
+		return E('div', { 'class': 'hs-metrics' }, tiles.map(function(t) {
+			return E('div', { 'class': 'hs-metric' }, [
+				E('span', { 'class': 'hs-metric-label' }, t[0]),
+				E('strong', { 'class': 'hs-metric-value' }, hs.h(t[1]))
+			]);
 		}));
 	},
 
@@ -231,24 +230,24 @@ return view.extend({
 			E('div', { 'class': 'cbi-section' }, [ E('h3', _('Overview')), E('div', { 'id': 'hs-summary' }) ]),
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', _('Active sessions')),
-				E('table', { 'class': 'table', 'id': 'hs-sessions' }, [
+				E('div', { 'class': 'hs-table-scroll' }, E('table', { 'class': 'table', 'id': 'hs-sessions' }, [
 					header([ _('User'), _('MAC'), _('IPv4'), _('IPv6'), _('Server'), _('Login by'), _('Uptime'),
 						_('Time left'), _('Up / down'), _('Rate limit'), '' ])
-				]),
+				])),
 				this.pageButtons('hs-sessions', 'sessionOffset')
 			]),
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', _('Hosts')),
-				E('table', { 'class': 'table', 'id': 'hs-hosts' }, [
+				E('div', { 'class': 'hs-table-scroll' }, E('table', { 'class': 'table', 'id': 'hs-hosts' }, [
 					header([ _('MAC'), _('DHCP hostname'), _('State'), _('Server'), _('Device'), _('IPv4'), _('IPv6') ])
-				]),
+				])),
 				this.pageButtons('hs-hosts', 'hostOffset')
 			]),
 			E('div', { 'class': 'cbi-section' }, [
 				E('h3', _('Cookies')),
-				E('table', { 'class': 'table', 'id': 'hs-cookies' }, [
+				E('div', { 'class': 'hs-table-scroll' }, E('table', { 'class': 'table', 'id': 'hs-cookies' }, [
 					header([ _('Type'), _('User'), _('MAC'), _('Expires in'), '' ])
-				])
+				]))
 			])
 		]);
 
@@ -259,7 +258,7 @@ return view.extend({
 
 		poll.add(L.bind(function() { return this.refresh(); }, this), 15);
 
-		return view;
+		return hs.wrap(view);
 	},
 
 	handleSave: null,

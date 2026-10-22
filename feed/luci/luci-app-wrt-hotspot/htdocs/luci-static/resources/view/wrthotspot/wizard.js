@@ -104,7 +104,7 @@ return view.extend({
 			}
 		}
 
-		return Promise.resolve(content).then(function(node) {
+		return hs.wrap(Promise.resolve(content).then(function(node) {
 			return E('div', {}, [
 				E('h2', _('Hotspot Quick Setup')),
 				navigation(),
@@ -114,6 +114,6 @@ return view.extend({
 					E('a', { 'href': L.url('admin/services/wrthotspot/diagnostics') }, _('Check hotspot'))
 				] : E('a', { 'href': stepUrl(STEP + 1) }, _('Next step →')))
 			]);
-		});
+		}));
 	}
 });

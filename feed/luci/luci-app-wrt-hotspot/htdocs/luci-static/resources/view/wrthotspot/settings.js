@@ -197,6 +197,6 @@ return view.extend({
 		o = s.taboption('advanced', form.Value, 'db_dir', _('Database directory'));
 		o.placeholder = '/etc/wrthotspot';
 
-		return m.render();
+		return hs.wrap(m.render());
 	}
 });

@@ -265,17 +265,17 @@ return view.extend({
 		var count = E('div', { 'id': 'hs-user-count', 'class': 'cbi-value-description' });
 		window.setTimeout(L.bind(this.showCount, this, data[0]), 0);
 
-		return E('div', {}, [
+		return hs.wrap(E('div', {}, [
 			E('h2', _('Hotspot users')),
 			E('div', { 'class': 'cbi-map-descr' }, _('Local accounts (MikroTik /ip hotspot user). Users unknown here are tried against RADIUS when a server profile uses RADIUS.')),
 			E('div', { 'class': 'cbi-section' }, [
-				search, count, E('div', { 'class': 'cbi-value' }, [ previous, ' ', next ]),
-				table,
+				E('div', { 'class': 'hs-table-toolbar' }, [ search, count, E('div', {}, [ previous, ' ', next ]) ]),
+				E('div', { 'class': 'hs-table-scroll' }, table),
 				E('div', { 'class': 'cbi-section-create' }, [
 					E('button', { 'class': 'btn cbi-button-add', 'click': ui.createHandlerFn(this, 'edit', null) }, _('Add user'))
 				])
 			])
-		]);
+		]));
 	},
 
 	handleSave: null,

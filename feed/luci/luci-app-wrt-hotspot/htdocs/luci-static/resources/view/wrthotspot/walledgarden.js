@@ -2,6 +2,7 @@
 'require view';
 'require form';
 'require uci';
+'require tools.wrthotspot as hs';
 
 function serverOption(s) {
 	var o = s.option(form.ListValue, 'server', _('Server'));
@@ -76,6 +77,6 @@ return view.extend({
 			return true;
 		};
 
-		return m.render();
+		return hs.wrap(m.render());
 	}
 });

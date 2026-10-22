@@ -2,6 +2,7 @@
 'require view';
 'require form';
 'require uci';
+'require tools.wrthotspot as hs';
 
 return view.extend({
 	load: function() {
@@ -69,6 +70,6 @@ return view.extend({
 		o.datatype = 'or("0", port)';
 		o.placeholder = '3799';
 
-		return m.render();
+		return hs.wrap(m.render());
 	}
 });

@@ -86,7 +86,7 @@ return view.extend({
 		nets.forEach(function(n) { choices[n] = n; });
 		var netsel = new ui.Select(nets[0], choices, { sort: true });
 
-		return E('div', {}, [
+		return hs.wrap(E('div', {}, [
 			E('h2', _('Hotspot diagnostics')),
 			E('div', { 'class': 'cbi-section' }, [
 				table,
@@ -112,7 +112,7 @@ return view.extend({
 					}, _('Set up'))
 				])
 			])
-		]);
+		]));
 	},
 
 	handleSave: null,

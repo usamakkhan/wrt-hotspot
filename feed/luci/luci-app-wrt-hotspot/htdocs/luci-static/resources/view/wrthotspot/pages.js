@@ -469,7 +469,7 @@ return view.extend({
 
 		var l = this.info.limits;
 
-		return E('div', {}, [
+		return hs.wrap(E('div', {}, [
 			E('h2', _('Hotspot login pages')),
 			E('p', [
 				_('The pages hotspot users see. Download a set as a starting point, edit it, zip it and upload it here; then pick it for a server profile. MikroTik hotspot page sets work too.'), ' ',
@@ -503,7 +503,7 @@ return view.extend({
 					}, _('Upload'))
 				])
 			])
-		]);
+		]));
 	},
 
 	handleSave: null,
