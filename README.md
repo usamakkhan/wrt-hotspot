@@ -40,14 +40,14 @@ apk add wrt-hotspot-full
 ### OpenWrt 24.10 (opkg)
 
 ```sh
-wget -O /tmp/wrthotspot.pub https://github.com/usamakkhan/wrt-hotspot/releases/latest/download/fe4302d5107a252b
+wget -O /tmp/wrthotspot.pub https://github.com/usamakkhan/wrt-hotspot/releases/latest/download/dcedbf2d84a0ef59
 opkg-key add /tmp/wrthotspot.pub
 echo 'src/gz wrthotspot https://github.com/usamakkhan/wrt-hotspot/releases/latest/download' >> /etc/opkg/customfeeds.conf
 opkg update
 opkg install wrt-hotspot-full
 ```
 
-The feed URLs follow the latest release. The 0.10.2 release changes signing keys; existing routers must install its new public key before updating, as described in [Upgrades and backups](docs/upgrades.md#version-0102-signing-key-change). Older versioned feed URLs remain on 0.10.1 so they continue to work with the old keys. If the repository is private, host the built feed yourself because unauthenticated routers cannot download private release assets.
+The feed URLs follow the latest release. The release process also refreshes older versioned feed URLs. If the repository is private, host the built feed yourself because unauthenticated routers cannot download private release assets.
 
 ## Configure a hotspot network
 
